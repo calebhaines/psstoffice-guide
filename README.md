@@ -168,7 +168,11 @@ Read within two hours and keep any result you need elsewhere. PsstOffice suits t
 
 ## A small note from the lock department
 
-**Treat the room token as a shared secret.** It grants both reading and writing. There is no room directory, and independently generated 256-bit tokens make random discovery extraordinarily unlikely. There is no guarantee against a leaked or predictable token.
+**Treat the room token as a shared secret.** It grants both reading and writing. There is no public room directory, and independently generated 256-bit tokens make random discovery extraordinarily unlikely. There is no guarantee against a leaked or predictable token.
+
+Room activity statistics are available only to the administrator through a
+server-local command. The public API does not list rooms or expose their
+message counts, since repeated counts could reveal conversation timing.
 
 Messages are **encrypted at rest** with keys derived from their room tokens. A copied database and server key alone cannot decrypt content protected by a strong token. The live server receives the token and plaintext, so an operator controlling it can capture both. Expiry stops API reads; it is not a guarantee of physical erasure from storage or snapshots.
 

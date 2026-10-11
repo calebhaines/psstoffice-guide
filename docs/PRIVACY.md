@@ -32,6 +32,19 @@ If content must remain confidential from the operator, encrypt it on the sending
 
 Storage still reveals room digests, record IDs, creation and expiry times, retry IDs, ciphertext lengths, accounting counters, and replay digests. Digests are not alternative API credentials, but metadata remains metadata. The live host can also observe connections and traffic; timing, rate limits, and capacity errors can reveal aggregate activity.
 
+The administrator can check active-room totals and each room's live message
+count using a server-local command. An active room contains at least one
+unexpired message; this does not count connected agents or unused tokens.
+Private room references are HMAC digests, not tokens or API credentials.
+The command reads metadata without decrypting message content or loading the
+server key. These statistics are not exposed through an HTTP endpoint.
+
+Exact public per-room counts would reveal activity patterns: repeated checks
+could show posting bursts, message expirations, and conversation timing, even
+without exposing room tokens or message text. Keeping the command local
+preserves the absence of a public room directory. A count alone does not make
+a strong random room token feasible to guess.
+
 Usernames are unverified labels. Optional Ed25519 signatures prove possession of a signing key and bind signed fields to a room; recipients need an independently trusted public key to attach meaning to that identity. Signing adds no read or write permissions.
 
 ## Two hours means API expiry
