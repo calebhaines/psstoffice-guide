@@ -61,6 +61,9 @@ class ProxySelectionTests(unittest.TestCase):
 
     def test_proxy_validation_rejects_unsafe_urls(self):
         for value in (
+            True,
+            123,
+            {},
             "https://proxy.invalid",
             "socks5://proxy.invalid",
             "proxy.invalid:8080",
@@ -79,6 +82,13 @@ class ProxySelectionTests(unittest.TestCase):
             " http://proxy.invalid",
             "http://proxy.invalid\n",
             "http://proxy.invalid\t",
+            "http://proxy.invalid\x7f",
+            "http://proxy.invalid\x80",
+            "http://proxy.invalid\x85",
+            "http://proxy.invalid\x9f",
+            "http://proxy.invalid\u1680",
+            "http://proxy.invalid\\evil",
+            "http://proxy.invalid%0a.evil",
             "http://[broken",
         ):
             with self.subTest(case=value):
@@ -87,7 +97,8 @@ class ProxySelectionTests(unittest.TestCase):
                 self.assertEqual(
                     str(error.exception),
                     "Proxy must be http://host[:port], without credentials, path, "
-                    "query, fragment, or whitespace. Use --direct to bypass proxy settings.",
+                    "query, fragment, whitespace, controls, backslashes, or percent escapes. "
+                    "Use --direct to bypass proxy settings.",
                 )
 
     def test_ipv6_proxy_is_supported(self):
@@ -161,6 +172,46 @@ class TransportTests(unittest.TestCase):
         connection.request.assert_not_called()
         self.assertIn("request was not sent", str(error.exception))
         self.assertNotIn("private", str(error.exception))
+
+    def test_unsafe_proxy_is_rejected_before_connection_or_token_transmission(self):
+        for proxy in (
+            "http://private-proxy-marker.invalid\\evil",
+            "http://private-proxy-marker.invalid%0a.evil",
+            "http://private-proxy-marker.invalid\x85",
+        ):
+            with (
+                self.subTest(proxy=proxy),
+                patch("agent.http.client.HTTPSConnection") as factory,
+            ):
+                with self.assertRaises(ValueError) as error:
+                    agent.request(
+                        "/v1/messages",
+                        {"message": "private-message-marker"},
+                        room_token="z" * 64,
+                        proxy=proxy,
+                    )
+                factory.assert_not_called()
+                self.assertNotIn("private-proxy-marker", str(error.exception))
+                self.assertNotIn("private-message-marker", str(error.exception))
+
+    def test_client_busy_error_preserves_retry_after_without_content(self):
+        connection = self.connection()
+        response = connection.getresponse.return_value
+        response.status = 429
+        response.read.return_value = (
+            b'{"error":{"code":"client_busy","message":"private-detail"}}'
+        )
+        response.getheader.return_value = "1"
+        with (
+            patch("agent.http.client.HTTPSConnection", return_value=connection),
+            self.assertRaises(agent.ServiceError) as error,
+        ):
+            agent.request("/v1/messages/read", {}, room_token="z" * 64, direct=True)
+        self.assertEqual(
+            str(error.exception), "HTTP 429 (client_busy). Retry-After: 1 seconds."
+        )
+        self.assertNotIn("private-detail", str(error.exception))
+        self.assertEqual(connection.request.call_count, 1)
 
     def test_distinct_connection_errors_are_safe(self):
         for failure, text in (

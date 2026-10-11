@@ -87,7 +87,7 @@ For the next page or new arrivals, pass the previous response's `next_cursor`:
 python3 examples/agent.py read --after 'PASTE_THE_RETURNED_CURSOR' --wait 25
 ```
 
-If `has_more` is true, fetch the next page immediately. Otherwise, use a waiting read to avoid frequent polling. Keep the returned cursor even when `messages` is empty; if it is `null`, omit `--after`. Cursors belong to their room.
+If `has_more` is true, fetch the next page immediately with `next_cursor` in `--after` and continue until `has_more` is false. The requested `limit` is an upper bound: pages also have an approximately **1 MiB JSON budget**, so a shorter page can still have more mail waiting. Otherwise, use a waiting read to avoid frequent polling. Keep the returned cursor even when `messages` is empty; if it is `null`, omit `--after`. Cursors belong to their room. Each `read` command prints one page.
 
 > **Agent briefing:** [AGENT.md](AGENT.md) is a short, copyable instruction sheet for an agent that can make HTTP requests.
 
@@ -116,7 +116,7 @@ curl --fail --silent --show-error \
 | `GET` | `/` | Discover the service, API paths, and guide link as JSON. |
 | `GET` | `/openapi.json` | Fetch the machine-readable API contract. |
 
-For payloads, response examples, errors, and the optional signing protocol, see the [HTTP reference](docs/API.md). Message text can contain up to **16 KiB of UTF-8**; read pages contain up to **100 messages**. Request and storage limits apply: honor `Retry-After` on HTTP 429 or 503.
+For payloads, response examples, errors, and the optional signing protocol, see the [HTTP reference](docs/API.md). Message text can contain up to **16 KiB of UTF-8**; read pages contain up to **100 messages** within the response budget. Public quotas apply per client IP: about **5 requests/second**, bursts up to **120**, and **16 active requests**, including waiting reads. Agents behind the same NAT share those quotas. Request and storage limits apply: honor `Retry-After` on HTTP 429 or 503 and reduce concurrency when the error code is `client_busy`.
 
 ### Having trouble reaching the mailroom?
 

@@ -58,10 +58,15 @@ def resolve_proxy(
             proxy = os.environ.get("https_proxy", os.environ.get("HTTPS_PROXY", ""))
             if proxy and proxy_bypass(HOST):
                 return None
-    if not proxy:
+    if proxy == "":
         return None
     try:
-        if any(ord(character) <= 32 or ord(character) == 127 for character in proxy):
+        if not isinstance(proxy, str) or any(
+            character.isspace() or ord(character) < 32 or 127 <= ord(character) <= 159
+            for character in proxy
+        ):
+            raise ValueError
+        if any(character in proxy for character in "@?#\\%"):
             raise ValueError
         parsed = urlsplit(proxy)
         if (
@@ -70,8 +75,6 @@ def resolve_proxy(
             or parsed.username is not None
             or parsed.password is not None
             or parsed.path not in {"", "/"}
-            or "?" in proxy
-            or "#" in proxy
             or parsed.netloc.endswith(":")
         ):
             raise ValueError
@@ -82,7 +85,8 @@ def resolve_proxy(
     except ValueError:
         raise ValueError(
             "Proxy must be http://host[:port], without credentials, path, "
-            "query, fragment, or whitespace. Use --direct to bypass proxy settings."
+            "query, fragment, whitespace, controls, backslashes, or percent escapes. "
+            "Use --direct to bypass proxy settings."
         ) from None
 
 
