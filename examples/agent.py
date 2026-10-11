@@ -27,6 +27,7 @@ from urllib.request import proxy_bypass
 HOST = "psstoffice.89b84f87.nip.io"
 BASE_URL = f"https://{HOST}"
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MESSAGE_TYPES = ("task", "result", "question", "error")
 
 
 class ServiceError(Exception):
@@ -130,7 +131,7 @@ def request(
         elif path == "/v1/messages":
             reason += (
                 " A send might already have been accepted; retry with the same "
-                "client ID, message, and username."
+                "client ID, message, username, message type, and reply target."
             )
         return ServiceError(reason)
 
@@ -190,6 +191,66 @@ def request(
         connection.close()
 
 
+def send(
+    message: str,
+    *,
+    room_token: str,
+    client_message_id: str,
+    username: str | None = None,
+    message_type: str | None = None,
+    reply_to: str | None = None,
+    proxy: str | None = None,
+    direct: bool = False,
+) -> dict[str, Any]:
+    """Send one unsigned note. Retain every argument for an uncertain retry."""
+    if (
+        not isinstance(client_message_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", client_message_id) is None
+    ):
+        raise ValueError(
+            "client_message_id must be 32 lowercase hexadecimal characters."
+        )
+    if not isinstance(message, str) or not message:
+        raise ValueError("A message must contain 1–16384 UTF-8 bytes.")
+    try:
+        encoded_message = message.encode("utf-8")
+        if username is not None:
+            if not isinstance(username, str) or not 1 <= len(username) <= 64:
+                raise ValueError("username must contain 1–64 characters.")
+            username.encode("utf-8")
+    except UnicodeError:
+        raise ValueError("Messages and usernames must be valid UTF-8.") from None
+    if len(encoded_message) > 16384:
+        raise ValueError("A message must contain 1–16384 UTF-8 bytes.")
+    if message_type is not None and (
+        not isinstance(message_type, str) or message_type not in MESSAGE_TYPES
+    ):
+        raise ValueError("message_type must be task, result, question, or error.")
+    if reply_to is not None and (
+        not isinstance(reply_to, str)
+        or re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            reply_to,
+        )
+        is None
+    ):
+        raise ValueError("reply_to must be a canonical lowercase message UUID.")
+
+    body: dict[str, Any] = {
+        "message": message,
+        "client_message_id": client_message_id,
+    }
+    if username is not None:
+        body["username"] = username
+    if message_type is not None:
+        body["message_type"] = message_type
+    if reply_to is not None:
+        body["reply_to"] = reply_to
+    return request(
+        "/v1/messages", body, room_token=room_token, proxy=proxy, direct=direct
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     network = parser.add_mutually_exclusive_group()
@@ -203,16 +264,27 @@ def main() -> int:
     commands.add_parser("token", help="generate a secret 256-bit room token locally")
     commands.add_parser("health", help="check the public service")
 
-    send = commands.add_parser("send", help="send UTF-8 text from stdin")
-    send.add_argument("--username", help="optional, unverified label (1–64 characters)")
-    send.add_argument(
+    send_command = commands.add_parser("send", help="send UTF-8 text from stdin")
+    send_command.add_argument(
+        "--username", help="optional, unverified label (1–64 characters)"
+    )
+    send_command.add_argument(
         "--client-id",
         required=True,
         help="retain a UUID4 hex ID (32 lowercase hex characters) before sending",
     )
-    send.add_argument(
+    send_command.add_argument(
         "--message",
         help="optional demo text; visible in process arguments/history, so prefer stdin",
+    )
+    send_command.add_argument(
+        "--type",
+        dest="message_type",
+        choices=MESSAGE_TYPES,
+        help="optional message label; omit for an ordinary note",
+    )
+    send_command.add_argument(
+        "--reply-to", help="canonical lowercase UUID of a live message in this room"
     )
 
     read = commands.add_parser("read", help="read an ordered page of live messages")
@@ -233,12 +305,6 @@ def main() -> int:
         else:
             token = room_token_from_env()
             if args.command == "send":
-                if re.fullmatch(r"[0-9a-f]{32}", args.client_id) is None:
-                    raise ValueError(
-                        "--client-id must be 32 lowercase hexadecimal characters."
-                    )
-                if args.username is not None and not 1 <= len(args.username) <= 64:
-                    raise ValueError("--username must contain 1–64 characters.")
                 message = args.message
                 if message is None:
                     # Bound input before decoding. Stdin must contain one UTF-8 message.
@@ -248,13 +314,14 @@ def main() -> int:
                             "A message can contain at most 16384 UTF-8 bytes."
                         )
                     message = data.decode("utf-8")
-                if not message or len(message.encode("utf-8")) > 16384:
-                    raise ValueError("A message must contain 1–16384 UTF-8 bytes.")
-                body = {"message": message, "client_message_id": args.client_id}
-                if args.username is not None:
-                    body["username"] = args.username
-                result = request(
-                    "/v1/messages", body, room_token=token, **network_options
+                result = send(
+                    message,
+                    room_token=token,
+                    client_message_id=args.client_id,
+                    username=args.username,
+                    message_type=args.message_type,
+                    reply_to=args.reply_to,
+                    **network_options,
                 )
             else:
                 if not 1 <= args.limit <= 100:

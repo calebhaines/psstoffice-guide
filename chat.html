@@ -12,11 +12,11 @@
     * { box-sizing:border-box; }
     [hidden] { display:none!important; }
     body { margin:0; min-height:100vh; min-height:100dvh; }
-    button,input,textarea { font:inherit; }
+    button,input,textarea,select { font:inherit; }
     button { cursor:pointer; }
     button:disabled { cursor:default; opacity:.58; }
-    button,input,textarea,a { -webkit-tap-highlight-color:transparent; }
-    button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible { outline:3px solid var(--coral); outline-offset:3px; }
+    button,input,textarea,select,a { -webkit-tap-highlight-color:transparent; }
+    button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible { outline:3px solid var(--coral); outline-offset:3px; }
     button { border:0; border-radius:12px; background:var(--ink); color:var(--white); font-weight:700; padding:13px 18px; transition:transform .12s,background .12s; }
     button:hover:not(:disabled) { transform:translateY(-1px); }
     button:active:not(:disabled) { transform:translateY(0); }
@@ -166,13 +166,23 @@
     .empty h3 { font-size:1.13rem; letter-spacing:-.035em; margin:0 0 8px; }
     .empty p { font-size:.8rem; color:var(--muted); max-width:275px; line-height:1.6; margin:0; }
     .message { margin-bottom:20px; animation:arrive .18s ease-out; }
-    .message-top { display:flex; align-items:baseline; gap:9px; margin-bottom:7px; }
+    .message-top { display:flex; align-items:baseline; flex-wrap:wrap; gap:9px; margin-bottom:7px; }
     .message-author { font-size:.77rem; font-weight:800; overflow-wrap:anywhere; white-space:pre-wrap; unicode-bidi:plaintext; }
     .message-time { font-size:.67rem; color:var(--muted); white-space:nowrap; }
     .message-bubble { border:1px solid var(--line); background:var(--paper); border-radius:0 13px 13px 13px; padding:13px 16px; font-size:.9rem; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; unicode-bidi:plaintext; }
     .message.own .message-bubble { background:#eef2d6; border-color:#dce3b9; }
     .message-meta { display:flex; flex-wrap:wrap; gap:10px; margin:6px 0 0 2px; color:var(--muted); font-size:.63rem; }
     .signature { padding:1px 5px; border:1px solid var(--line); border-radius:4px; }
+    .message-type { padding:2px 6px; border-radius:5px; font-size:.61rem; font-weight:750; line-height:1.3; }
+    .message-type[data-type="task"] { color:#66520d; background:#fff0b6; }
+    .message-type[data-type="result"] { color:#36592b; background:#e0edce; }
+    .message-type[data-type="question"] { color:#245781; background:#dceafa; }
+    .message-type[data-type="error"] { color:#8c352a; background:#ffe0d7; }
+    .message-reply { padding:0; border:0; border-radius:3px; background:transparent; color:var(--ink); font-size:.63rem; text-decoration:underline; text-underline-offset:2px; }
+    .message-reply:hover { background:transparent; box-shadow:none; }
+    .reply-reference { display:block; width:100%; margin:0 0 6px; padding:7px 10px; border:0; border-left:3px solid #a2b990; border-radius:4px; background:#eff2e7; color:var(--ink); text-align:left; font-size:.7rem; font-weight:500; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; unicode-bidi:plaintext; }
+    .reply-reference:disabled { opacity:1; background:#f1efe8; color:var(--muted); cursor:default; }
+    .message:focus { outline:2px solid #749158; outline-offset:5px; border-radius:4px; }
     #new-messages { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); padding:9px 15px; font-size:.75rem; box-shadow:0 5px 15px #173c3a20; z-index:1; }
     #new-messages:hover { transform:translateX(-50%) translateY(-1px); }
     .history-note { color:var(--muted); font-size:.72rem; text-align:center; border:1px dashed var(--line); padding:9px; border-radius:8px; margin-bottom:20px; }
@@ -183,6 +193,14 @@
     .composer-box:focus-within { outline:2px solid #173c3a40; outline-offset:2px; }
     .composer-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:9px 11px 11px 15px; }
     .composer-hint { font-size:.66rem; color:var(--muted); }
+    .composer-tools { display:flex; align-items:center; flex-wrap:wrap; gap:10px; min-width:0; }
+    .type-control { display:flex; align-items:center; gap:5px; margin:0; font-size:.66rem; color:var(--muted); white-space:nowrap; }
+    #message-type { width:auto; max-width:112px; padding:5px 22px 5px 7px; border:1px solid var(--line); border-radius:6px; background:var(--white); color:var(--ink); font-size:.7rem; }
+    #reply-target { display:flex; align-items:center; gap:9px; padding:8px 11px; margin:0 0 8px; border:1px solid #cbd8b9; border-radius:8px; background:#eff2e7; font-size:.72rem; }
+    #reply-target[hidden] { display:none; }
+    #reply-target[data-state="unavailable"] { border-color:#e5c4aa; background:#fff2e2; }
+    #reply-target-text { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; unicode-bidi:plaintext; }
+    #cancel-reply { flex-shrink:0; padding:4px 7px; font-size:.66rem; background:transparent; color:var(--ink); border:1px solid var(--line); }
     #byte-count.over { color:var(--danger); font-weight:750; }
     #send-button { padding:9px 15px; font-size:.78rem; }
     .composer-bottom { display:flex; justify-content:space-between; gap:12px; padding-top:8px; }
@@ -296,11 +314,21 @@
     .in-room .chat-header .sub { display:none; }
     .in-room .chat-signals { gap:3px; }
     .in-room #room-status { padding:4px 6px; }
-    .in-room .composer { padding:6px 10px; }
-    .in-room .composer textarea { height:45px; min-height:45px; max-height:45px; resize:none; padding:8px 10px; }
-    .in-room .composer-bar { padding:5px 7px; justify-content:flex-end; }
+    .in-room .composer { display:flex; flex-direction:column; padding:4px 10px; }
+    .in-room .composer > * { flex-shrink:0; }
+    .in-room #reply-target { order:0; }
+    .in-room .composer-box { order:1; }
+    .in-room #pending-notice { order:2; margin:8px 0 0; }
+    .in-room #composer-error { order:3; }
+    .in-room .composer textarea { height:36px; min-height:36px; max-height:36px; resize:none; padding:4px 10px; line-height:1.4; }
+    .in-room .composer-bar { padding:4px 7px; }
+    .in-room .composer-tools { gap:0; }
+    .in-room .type-control { font-size:.59rem; }
+    .in-room #message-type { padding:4px 18px 4px 5px; font-size:.66rem; max-width:100px; }
+    .in-room #reply-target { padding:2px 7px; margin-bottom:3px; font-size:.65rem; }
+    .in-room #cancel-reply { padding:2px 5px; font-size:.61rem; }
     .in-room .composer-hint,.in-room .composer-bottom { display:none; }
-    .in-room #send-button { padding:7px 12px; }
+    .in-room #send-button { padding:5px 12px; }
     }
     @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; }
     }
@@ -355,7 +383,8 @@
         <div class="messages-wrap"><div id="messages" role="log" aria-label="Room messages" aria-live="off" tabindex="0"></div><button id="new-messages" type="button" hidden>New notes ↓</button></div>
         <form id="composer-form" class="composer" novalidate>
           <div id="pending-notice" hidden role="status"><p id="pending-text"></p><button id="retry-send" type="button">Retry the same note</button> <button id="new-attempt" type="button" class="secondary small" hidden>Keep draft, clear old attempt</button></div>
-          <div class="composer-box"><label class="sr-only" for="message-input">Your message</label><textarea id="message-input" placeholder="Write a little note…" rows="2" spellcheck="true" aria-describedby="composer-help byte-count composer-error"></textarea><div class="composer-bar"><span id="composer-help" class="composer-hint">Ctrl / ⌘ + Enter to send · Enter for a new line</span><button id="send-button" type="submit">Send note </button></div></div>
+          <div id="reply-target" hidden role="status"><span id="reply-target-text"></span><button id="cancel-reply" type="button">Cancel reply</button></div>
+          <div class="composer-box"><label class="sr-only" for="message-input">Your message</label><textarea id="message-input" placeholder="Write a little note…" rows="2" spellcheck="true" aria-describedby="composer-help byte-count composer-error"></textarea><div class="composer-bar"><div class="composer-tools"><label class="type-control" for="message-type">Type<select id="message-type"><option value="">Plain</option><option value="task">Task</option><option value="result">Result</option><option value="question">Question</option><option value="error">Error</option></select></label><span id="composer-help" class="composer-hint">Ctrl / ⌘ + Enter to send · Enter for a new line</span></div><button id="send-button" type="submit">Send note </button></div></div>
           <div class="composer-bottom"><span class="quiet">Plain text. Names are labels; signatures identify keys.</span><span id="byte-count" class="quiet">0 / 16,384 bytes</span></div><p id="composer-error" class="error" role="alert"></p>
         </form>
       </section>
@@ -402,9 +431,11 @@
     const FILE_JSON_LIMIT = 524288;
     const STATUS_POLL_INTERVAL = 15000;
     const STATUS_COLORS = new Set(["green", "red", "yellow", "blue"]);
+    const MESSAGE_TYPES = new Set(["task", "result", "question", "error"]);
+    const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     const encoder = new TextEncoder();
     const $ = (id) => document.getElementById(id);
-    const ui = Object.fromEntries(["join-view", "chat-view", "join-form", "room-token", "username", "join-error", "active-token", "active-username", "messages", "message-input", "composer-form", "composer-error", "send-button", "byte-count", "connection-status", "read-notice", "pending-notice", "pending-text", "retry-send", "message-count", "new-messages", "announcements", "site-footer", "signing-toggle", "signing-status", "key-dialog", "manage-key", "generate-key", "import-key", "export-key", "clear-key", "public-key", "copy-public-key", "key-fingerprint", "key-import-text", "key-import-file", "key-error", "chatter-list", "filter-description", "open-files", "files-dialog", "file-input", "upload-file", "file-selection-name", "file-pending", "file-pending-text", "retry-file", "discard-file", "files-status", "files-error", "file-list", "room-status", "room-status-text", "status-dialog", "status-form", "status-input", "status-count", "save-status", "status-check", "status-error"].map((id) => [id, $(id)]));
+    const ui = Object.fromEntries(["join-view", "chat-view", "join-form", "room-token", "username", "join-error", "active-token", "active-username", "messages", "message-input", "message-type", "reply-target", "reply-target-text", "cancel-reply", "composer-form", "composer-error", "send-button", "byte-count", "connection-status", "read-notice", "pending-notice", "pending-text", "retry-send", "message-count", "new-messages", "announcements", "site-footer", "signing-toggle", "signing-status", "key-dialog", "manage-key", "generate-key", "import-key", "export-key", "clear-key", "public-key", "copy-public-key", "key-fingerprint", "key-import-text", "key-import-file", "key-error", "chatter-list", "filter-description", "open-files", "files-dialog", "file-input", "upload-file", "file-selection-name", "file-pending", "file-pending-text", "retry-file", "discard-file", "files-status", "files-error", "file-list", "room-status", "room-status-text", "status-dialog", "status-form", "status-input", "status-count", "save-status", "status-check", "status-error"].map((id) => [id, $(id)]));
     let session = null;
     let toastTimer;
     let scrollFrame;
@@ -448,10 +479,11 @@
     function canonicalSignature(signature) {
       return canonicalPoint(signature.slice(0, 32)) && lessThanLittleEndian(signature.slice(32), bytesFromHex("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"));
     }
-    function signingBytes(token, message, username, nonce, signedAt) {
+    function signingBytes(token, message, username, nonce, signedAt, messageType = null, replyTo = null) {
       // Property order is the Python protocol's sort_keys=True order. Well-formed
       // Unicode stays literal, including U+2028/U+2029; names absent on the wire
       // are signed as null. The room token never leaves the fixed API endpoint.
+      if (messageType !== null || replyTo !== null) return encoder.encode("psstoffice-message-v2\n" + JSON.stringify({ message, message_type: messageType, nonce, reply_to: replyTo, room_token: token, signed_at: signedAt, username }));
       return encoder.encode("agentboard-message-v1\n" + JSON.stringify({ message, nonce, room_token: token, signed_at: signedAt, username }));
     }
     async function supportsEd25519(s) {
@@ -583,7 +615,7 @@
           s.verificationKeys.set(receipt.signing.public_key, key);
           while (s.verificationKeys.size > HISTORY_LIMIT) s.verificationKeys.delete(s.verificationKeys.keys().next().value);
         }
-        const valid = await crypto.subtle.verify({ name: "Ed25519" }, key, signature, signingBytes(s.token, receipt.message, receipt.username, receipt.signing.nonce, receipt.signing.signed_at));
+        const valid = await crypto.subtle.verify({ name: "Ed25519" }, key, signature, signingBytes(s.token, receipt.message, receipt.username, receipt.signing.nonce, receipt.signing.signed_at, receipt.message_type, receipt.reply_to));
         if (!current(s)) throw new RequestError("cancelled");
         receipt.signatureState = valid ? "verified" : "invalid";
         if (valid) {
@@ -1011,11 +1043,13 @@
         if (typeof value[field] !== "string" || value[field].length > 64 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value[field]) || !Number.isFinite(Date.parse(value[field]))) throw new RequestError("protocol");
       }
       if (Date.parse(value.expires_at) <= Date.parse(value.created_at)) throw new RequestError("protocol");
+      const messageType = value.message_type ?? null; const replyTo = value.reply_to ?? null;
+      if ((messageType !== null && !MESSAGE_TYPES.has(messageType)) || (replyTo !== null && (typeof replyTo !== "string" || !MESSAGE_ID.test(replyTo) || replyTo === value.id))) throw new RequestError("protocol");
       if (value.signing !== null) {
         const signing = value.signing;
         if (!plainObject(signing) || typeof signing.public_key !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(signing.public_key) || typeof signing.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(signing.signature) || typeof signing.nonce !== "string" || !/^[0-9a-f]{32}$/.test(signing.nonce) || !Number.isSafeInteger(signing.signed_at)) throw new RequestError("protocol");
       }
-      return { id: value.id, message: value.message, username: value.username, signing: value.signing === null ? null : { public_key: value.signing.public_key, signature: value.signing.signature, nonce: value.signing.nonce, signed_at: value.signing.signed_at }, created_at: value.created_at, expires_at: value.expires_at };
+      return { id: value.id, message: value.message, username: value.username, message_type: messageType, reply_to: replyTo, signing: value.signing === null ? null : { public_key: value.signing.public_key, signature: value.signing.signature, nonce: value.signing.nonce, signed_at: value.signing.signed_at }, created_at: value.created_at, expires_at: value.expires_at };
     }
     function validatePage(value, previousCursor) {
       if (!plainObject(value) || !Array.isArray(value.messages) || value.messages.length > 100 || typeof value.has_more !== "boolean" || !(value.next_cursor === null || (typeof value.next_cursor === "string" && value.next_cursor.length > 0 && value.next_cursor.length <= 2048))) throw new RequestError("protocol");
@@ -1033,16 +1067,69 @@
       const minutes = Math.ceil(seconds / 60);
       return "expires in " + (minutes >= 60 ? Math.floor(minutes / 60) + "h " + minutes % 60 + "m" : minutes + "m");
     }
-    function messageElement(receipt, own) {
+    function liveParent(s, id) {
+      const parent = s.messages.get(id);
+      return parent && Date.parse(parent.expires_at) > Date.now() ? parent : null;
+    }
+    function parentPreview(parent) {
+      const author = parent.username === null ? "Anonymous" : parent.username;
+      let snippet = ""; let count = 0;
+      for (const character of parent.message.replace(/\s+/gu, " ")) { if (count++ === 80) return author + ": " + snippet + "…"; snippet += character; }
+      return author + ": " + snippet;
+    }
+    function refreshReplyUI(s) {
+      if (!current(s)) return;
+      const replyTo = s.pending?.payload.reply_to ?? s.replyTo;
+      const previews = new Map();
+      const preview = (parent) => { if (!previews.has(parent.id)) previews.set(parent.id, parentPreview(parent)); return previews.get(parent.id); };
+      ui["reply-target"].hidden = !replyTo;
+      ui["cancel-reply"].disabled = Boolean(s.pending);
+      ui["message-type"].disabled = Boolean(s.pending);
+      if (replyTo) {
+        const parent = s.replyUnavailable && replyTo === s.replyTo ? null : liveParent(s, replyTo);
+        ui["reply-target"].dataset.state = parent ? "available" : "unavailable";
+        ui["reply-target-text"].textContent = parent ? "Replying to " + preview(parent) : "Original note unavailable · " + replyTo;
+        ui["reply-target-text"].title = parent ? "Replying to note " + replyTo : "The original note expired or is no longer loaded. Cancel this reply or choose another note before a new send. An already accepted reply can still be retried.";
+      } else {
+        ui["reply-target-text"].textContent = ""; ui["reply-target-text"].removeAttribute("title"); delete ui["reply-target"].dataset.state;
+      }
+      for (const id of s.order) {
+        const receipt = s.messages.get(id); const element = s.elements.get(id);
+        const replyButton = element?.querySelector(".message-reply"); if (replyButton) replyButton.disabled = Boolean(s.pending);
+        if (!receipt.reply_to) continue;
+        const reference = element?.querySelector(".reply-reference"); if (!reference) continue;
+        const parent = liveParent(s, receipt.reply_to);
+        reference.disabled = !parent;
+        reference.textContent = parent ? "↳ " + preview(parent) : "↳ Original note unavailable · " + receipt.reply_to;
+        reference.title = parent ? "Show original note " + receipt.reply_to : "Original note expired, isn't loaded, or was omitted from this window. A reply does not extend its lifetime.";
+      }
+    }
+    function chooseReply(s, id) {
+      if (!current(s) || s.pending || !liveParent(s, id) || (s.replyUnavailable && s.replyTo === id)) return;
+      s.replyTo = id; s.replyUnavailable = false; ui["composer-error"].textContent = ""; refreshReplyUI(s); updateComposer(); ui["message-input"].focus();
+    }
+    function showReplyParent(s, id) {
+      if (!current(s) || !liveParent(s, id)) return;
+      const parent = s.elements.get(id); if (!parent) return;
+      cancelAnimationFrame(scrollFrame);
+      if (s.selectedChatter !== "all") { s.selectedChatter = "all"; s.selectedChatterInfo = null; refreshEmpty(s); }
+      // Only the message list scrolls; the composer stays within the viewport.
+      const list = ui.messages; list.scrollTop += parent.getBoundingClientRect().top - list.getBoundingClientRect().top - 12;
+      parent.focus({ preventScroll: true }); ui["new-messages"].hidden = nearBottom();
+    }
+    function messageElement(s, receipt, own) {
       const article = document.createElement("article"); article.className = "message" + (own ? " own" : ""); article.dataset.messageId = receipt.id;
+      article.tabIndex = -1;
       article.dataset.chatterId = chatterId(receipt);
       const top = document.createElement("div"); top.className = "message-top";
       const author = document.createElement("span"); author.className = "message-author"; author.textContent = receipt.username === null ? "Anonymous" : receipt.username;
       const time = document.createElement("time"); time.className = "message-time"; time.dateTime = receipt.created_at; time.textContent = timeFormatter.format(new Date(receipt.created_at)); time.title = new Date(receipt.created_at).toLocaleString();
       top.append(author, time);
+      if (receipt.message_type) { const type = document.createElement("span"); type.className = "message-type"; type.dataset.type = receipt.message_type; type.textContent = receipt.message_type; top.append(type); }
       const bubble = document.createElement("div"); bubble.className = "message-bubble"; bubble.textContent = receipt.message;
       const meta = document.createElement("div"); meta.className = "message-meta";
       const expiry = document.createElement("span"); expiry.className = "message-expiry"; expiry.textContent = expiryLabel(receipt); meta.append(expiry);
+      const reply = document.createElement("button"); reply.type = "button"; reply.className = "message-reply"; reply.dataset.replyTo = receipt.id; reply.textContent = "Reply"; reply.setAttribute("aria-label", "Reply to note from " + (receipt.username === null ? "Anonymous" : receipt.username)); reply.addEventListener("click", () => chooseReply(s, receipt.id)); meta.append(reply);
       if (own) { const you = document.createElement("span"); you.className = "own-label"; you.textContent = "sent from this window"; meta.append(you); }
       if (receipt.signing) {
         const signature = document.createElement("span"); signature.className = "signature"; signature.dataset.state = receipt.signatureState;
@@ -1050,7 +1137,9 @@
         signature.title = receipt.signatureState === "verified" ? "Public key: " + receipt.signing.public_key + "\nSHA-256: " + receipt.keyFingerprint + "\nValid signature proves control of this key, not a real-world identity." : "This signature has not established a signing identity.";
         meta.append(signature);
       }
-      article.append(top, bubble, meta); return article;
+      article.append(top);
+      if (receipt.reply_to) { const reference = document.createElement("button"); reference.type = "button"; reference.className = "reply-reference"; reference.dataset.replyTo = receipt.reply_to; reference.addEventListener("click", () => showReplyParent(s, receipt.reply_to)); article.append(reference); }
+      article.append(bubble, meta); return article;
     }
     function emptyState(s) {
       const visible = s.order.some((id) => s.selectedChatter === "all" || chatterId(s.messages.get(id)) === s.selectedChatter);
@@ -1127,7 +1216,7 @@
           continue;
         }
         ui.messages.querySelector(".empty")?.remove();
-        const element = messageElement(receipt, s.ownIds.has(receipt.id));
+        const element = messageElement(s, receipt, s.ownIds.has(receipt.id));
         s.messages.set(receipt.id, receipt); s.elements.set(receipt.id, element); s.order.push(receipt.id); ui.messages.append(element);
         if (s.selectedChatter === "all" || chatterId(receipt) === s.selectedChatter) visibleAdded++;
       }
@@ -1136,6 +1225,7 @@
       }
       if (s.trimmed && !ui.messages.querySelector(".history-note")) { const note = document.createElement("div"); note.className = "history-note"; note.textContent = "This window keeps the latest " + HISTORY_LIMIT + " live notes. Older notes are omitted from this window."; ui.messages.prepend(note); }
       refreshEmpty(s);
+      refreshReplyUI(s); updateComposer();
       if (visibleAdded) {
         if (follow) scrollToBottom(); else ui["new-messages"].hidden = false;
         announce(visibleAdded + (visibleAdded === 1 ? " new note." : " new notes."));
@@ -1200,7 +1290,7 @@
       const bytes = encoder.encode(ui["message-input"].value).length;
       ui["byte-count"].textContent = bytes.toLocaleString("en-US") + " / 16,384 bytes";
       ui["byte-count"].classList.toggle("over", bytes > MAX_BYTES);
-      ui["send-button"].disabled = !session || Boolean(session.pending) || session.keyBusy || bytes === 0 || bytes > MAX_BYTES;
+      ui["send-button"].disabled = !session || Boolean(session.pending) || session.keyBusy || bytes === 0 || bytes > MAX_BYTES || Boolean(session.replyTo && (session.replyUnavailable || !liveParent(session, session.replyTo)));
     }
     function updatePending(s) {
       if (!current(s)) return;
@@ -1209,11 +1299,12 @@
       ui["message-input"].readOnly = Boolean(pending);
       ui["active-username"].disabled = Boolean(pending);
       refreshKeyUI(s);
-      ui["send-button"].textContent = pending?.sending ? "Sending…" : "Send note";
+      refreshReplyUI(s);
+      ui["send-button"].textContent = pending?.sending ? "Sending…" : pending ? "Not confirmed" : "Send note";
       if (pending && !pending.sending) {
         const expired = Date.now() - pending.startedAt >= RETRY_LIFETIME;
         const wait = Math.max(0, Math.ceil((pending.retryAt - Date.now()) / 1000));
-        ui["pending-text"].textContent = expired ? "This attempt is over two hours old. Its retry protection may have expired, so this window won't resend it. You can keep the draft and clear this attempt; sending again creates a new note and may create a second copy." : "Delivery isn't confirmed. Your exact note and retry ID are kept here. Retry the same note to avoid a duplicate while its original receipt is live.";
+        ui["pending-text"].textContent = expired ? "This attempt is over two hours old. Its retry protection may have expired, so this window won't resend it. You can keep the draft and clear this attempt; sending again creates a new note and may create a second copy." : "Delivery isn't confirmed. Your exact note, type, reply target, and retry ID are kept here. Retry the same note to avoid a duplicate while its original receipt is live.";
         ui["retry-send"].disabled = expired || wait > 0;
         ui["retry-send"].textContent = expired ? "Retry window closed" : wait > 0 ? "Retry in " + wait + "s" : "Retry the same note";
         $("new-attempt").hidden = !expired;
@@ -1223,6 +1314,7 @@
     function sendErrorText(error) {
       if (error.kind === "signing") return "Signing couldn't finish safely. Your draft and signing key are unchanged; retry the same note. Unsigned sending is never substituted.";
       if (error.status === 409) return "The mailroom rejected this retry ID. Your draft is unchanged. Leave and rejoin before trying a new note.";
+      if (error.status === 404) return "The original note is no longer available for a new reply. Your draft and type are unchanged. Cancel this reply or choose another note.";
       if (error.status === 413) return "The mailroom rejected this note as too large. Shorten your draft and try again.";
       if (error.status === 400 || error.status === 422) return "The mailroom rejected the note. Check the name, message, and system clock if signing; your draft is unchanged.";
       if (error.status === 429) return "The mailroom is pacing requests. Please wait, then retry the same note.";
@@ -1238,7 +1330,7 @@
           if (!pending.payload.signing || Math.abs(now - pending.payload.signing.signed_at) >= SIGNING_FRESHNESS - 30) {
             const nonce = randomHex(16);
             let signature;
-            try { signature = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pending.key.privateKey, signingBytes(s.token, pending.payload.message, pending.payload.username ?? null, nonce, now))); }
+            try { signature = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pending.key.privateKey, signingBytes(s.token, pending.payload.message, pending.payload.username ?? null, nonce, now, pending.payload.message_type ?? null, pending.payload.reply_to ?? null))); }
             catch { throw new RequestError("signing"); }
             if (!current(s) || s.pending !== pending) return;
             if (Math.abs(Math.floor(Date.now() / 1000) - now) >= SIGNING_FRESHNESS - 30) throw new RequestError("signing");
@@ -1249,7 +1341,7 @@
         const { data, status } = await request(s, "/v1/messages", pending.payload, 20000);
         if (status !== 201) throw new RequestError("protocol");
         const receipt = await verifyReceipt(s, validateReceipt(data));
-        if (receipt.message !== pending.payload.message || receipt.username !== (pending.payload.username ?? null) || (pending.key ? receipt.signing?.public_key !== pending.key.publicKey || receipt.signatureState !== "verified" : receipt.signing !== null)) throw new RequestError("protocol");
+        if (receipt.message !== pending.payload.message || receipt.username !== (pending.payload.username ?? null) || receipt.message_type !== (pending.payload.message_type ?? null) || receipt.reply_to !== (pending.payload.reply_to ?? null) || (pending.key ? receipt.signing?.public_key !== pending.key.publicKey || receipt.signatureState !== "verified" : receipt.signing !== null)) throw new RequestError("protocol");
         if (!current(s)) return;
         // Reads establish insertion order. A send receipt can race earlier pages;
         // mark it as ours now, then let the reader place it in the conversation.
@@ -1257,25 +1349,27 @@
         while (s.ownIds.size > HISTORY_LIMIT) s.ownIds.delete(s.ownIds.values().next().value);
         if (s.messages.has(receipt.id)) appendReceipts(s, [receipt], true);
         if (ui["message-input"].value === pending.payload.message) ui["message-input"].value = "";
-        s.pending = null; ui["composer-error"].textContent = ""; updatePending(s); ui["message-input"].focus(); announce("Note delivered.");
+        s.pending = null; s.replyTo = null; s.replyUnavailable = false; ui["message-type"].value = ""; ui["composer-error"].textContent = ""; updatePending(s); ui["message-input"].focus(); announce("Note delivered.");
       } catch (error) {
         if (!current(s)) return;
         pending.sending = false;
         pending.retryAt = Date.now() + Math.max(error.retryAfter || 0, 1000);
         // Only an explicit validation rejection makes it safe to edit this draft.
-        if ([400, 413, 422].includes(error.status)) s.pending = null;
+        if ([400, 404, 413, 422].includes(error.status)) s.pending = null;
+        if (error.status === 404 && pending.payload.reply_to) s.replyUnavailable = true;
         ui["composer-error"].textContent = sendErrorText(error); updatePending(s);
       }
     }
     function startSession(token, username) {
       if (session) leaveRoom();
-      const s = { token, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set(), roomStatus: null, statusBusy: false, statusCheckBusy: false, statusUncertain: false, statusRetryAt: 0, statusReadVersion: 0, statusWriteVersion: 0, statusDialogVersion: 0 };
+      const s = { token, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, replyTo: null, replyUnavailable: false, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set(), roomStatus: null, statusBusy: false, statusCheckBusy: false, statusUncertain: false, statusRetryAt: 0, statusReadVersion: 0, statusWriteVersion: 0, statusDialogVersion: 0 };
       session = s;
       ui["signing-toggle"].checked = false; clearImportFields(); ui["key-error"].textContent = "";
       s.supportPromise = supportsEd25519(s).then((supported) => { if (current(s)) { s.cryptoSupport = supported; refreshKeyUI(s); } return supported; });
       ui["room-token"].value = ""; ui.username.value = ""; ui["join-error"].textContent = "";
       ui["active-token"].value = token; ui["active-token"].type = "password"; $("reveal-token").textContent = "Show"; $("reveal-token").setAttribute("aria-pressed", "false");
       ui["active-username"].value = username; ui["message-input"].value = ""; ui["composer-error"].textContent = ""; ui.messages.replaceChildren(); ui["read-notice"].hidden = true; ui["new-messages"].hidden = true;
+      ui["message-type"].value = "";
       ui["join-view"].hidden = true; ui["chat-view"].hidden = false; ui["site-footer"].hidden = true;
       document.body.classList.add("in-room");
       setConnection(s, "connecting", "Connecting"); emptyState(s); refreshEmpty(s); updatePending(s); updateFileControls(s);
@@ -1291,12 +1385,13 @@
       s.roomStatus = null; s.statusWriteVersion++; s.statusReadVersion++; s.statusBusy = false; s.statusCheckBusy = false; s.statusUncertain = false; s.statusRetryAt = 0; closeStatus();
       ui["room-status-text"].textContent = "Set room status"; ui["room-status"].dataset.color = "unset"; ui["room-status"].setAttribute("aria-label", "Set room status"); ui["room-status"].removeAttribute("title");
       ui["status-input"].disabled = false; for (const radio of ui["status-form"].querySelectorAll('input[name="status-color"]')) { radio.disabled = false; radio.checked = radio.value === "green"; } ui["save-status"].disabled = true; ui["save-status"].textContent = "Save room status"; ui["status-check"].disabled = false; ui["status-check"].textContent = "Check current status";
-      s.token = ""; s.pending = null; s.cursor = null; s.messages.clear(); s.elements.clear(); s.ownIds.clear(); s.order.length = 0;
+      s.token = ""; s.pending = null; s.replyTo = null; s.replyUnavailable = false; s.cursor = null; s.messages.clear(); s.elements.clear(); s.ownIds.clear(); s.order.length = 0;
       s.keyVersion++; s.key = null; s.keyBusy = false; s.verificationKeys.clear(); s.selectedChatter = "all"; s.selectedChatterInfo = null;
       if (ui["key-dialog"].open) ui["key-dialog"].close(); clearImportFields();
       ui["signing-toggle"].checked = false; ui["signing-toggle"].disabled = true; ui["public-key"].value = ""; ui["key-fingerprint"].textContent = ""; ui["key-error"].textContent = ""; ui["chatter-list"].replaceChildren(); ui["filter-description"].textContent = ""; ui["filter-description"].hidden = true;
       ui["signing-status"].textContent = "Optional. Your private key stays in this window.";
       ui.messages.replaceChildren(); ui["active-token"].value = ""; ui["active-username"].value = ""; ui["active-username"].disabled = false; ui["message-input"].value = ""; ui["message-input"].readOnly = false;
+      ui["message-type"].value = ""; ui["message-type"].disabled = false; ui["reply-target"].hidden = true; delete ui["reply-target"].dataset.state; ui["reply-target-text"].textContent = ""; ui["reply-target-text"].removeAttribute("title"); ui["cancel-reply"].disabled = false;
       ui["room-token"].value = ""; ui["room-token"].type = "password"; $("reveal-join-token").setAttribute("aria-pressed", "false"); $("reveal-join-token").setAttribute("aria-label", "Show room token"); ui.username.value = ""; ui["join-error"].textContent = "";
       ui["composer-error"].textContent = ""; ui["read-notice"].textContent = ""; ui["pending-text"].textContent = ""; ui["pending-notice"].hidden = true; ui["new-messages"].hidden = true;
       $("toast").hidden = true; $("toast").textContent = ""; ui.announcements.textContent = "";
@@ -1367,13 +1462,20 @@
       const message = ui["message-input"].value; const username = ui["active-username"].value;
       if (!message.length || !validUnicode(message) || encoder.encode(message).length > MAX_BYTES) { ui["composer-error"].textContent = "Write a valid Unicode note of at most 16,384 UTF-8 bytes."; return; }
       if (!validUsername(username)) { ui["composer-error"].textContent = "Your name can contain at most 64 Unicode characters."; ui["active-username"].focus(); return; }
+      if (s.replyTo && (s.replyUnavailable || !liveParent(s, s.replyTo))) { refreshReplyUI(s); updateComposer(); ui["composer-error"].textContent = "The original note is no longer available. Cancel this reply or choose another note; your draft and type stay here."; return; }
+      const messageType = ui["message-type"].value;
+      if (messageType !== "" && !MESSAGE_TYPES.has(messageType)) { ui["composer-error"].textContent = "Choose Plain, Task, Result, Question, or Error."; return; }
       if (ui["signing-toggle"].checked && (!s.key || s.cryptoSupport !== true)) { ui["composer-error"].textContent = "Generate or import a signing key first, or turn signing off."; return; }
       try {
         const payload = { message, client_message_id: randomHex(16) }; if (username.length) payload.username = username;
+        if (messageType !== "") payload.message_type = messageType;
+        if (s.replyTo) payload.reply_to = s.replyTo;
         s.pending = { payload, key: ui["signing-toggle"].checked ? s.key : null, startedAt: Date.now(), retryAt: 0, sending: false }; void sendPending(s);
       } catch { ui["composer-error"].textContent = "Secure random generation isn't available, so this window can't safely create a retry ID."; }
     });
     ui["message-input"].addEventListener("input", () => { ui["composer-error"].textContent = ""; updateComposer(); });
+    ui["message-type"].addEventListener("change", () => { if (session && !session.pending) { ui["composer-error"].textContent = ""; updateComposer(); } });
+    ui["cancel-reply"].addEventListener("click", () => { const s = session; if (!s || s.pending) return; s.replyTo = null; s.replyUnavailable = false; ui["composer-error"].textContent = ""; refreshReplyUI(s); updateComposer(); ui["message-input"].focus(); });
     ui["message-input"].addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.isComposing) { event.preventDefault(); ui["composer-form"].requestSubmit(); } });
     ui["retry-send"].addEventListener("click", () => { if (session) void sendPending(session); });
     $("new-attempt").addEventListener("click", () => {

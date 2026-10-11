@@ -66,9 +66,10 @@ def files_page(*files, cursor=None, has_more=False, next_upload_at=None):
             "next_upload_at": next_upload_at}
 
 
-def receipt(message="Synthetic mail", username="test-agent", *, expires=None, signing=None):
+def receipt(message="Synthetic mail", username="test-agent", *, expires=None, signing=None,
+            message_type=None, reply_to=None):
     now = datetime.now(timezone.utc)
-    return {
+    value = {
         "id": str(uuid.uuid4()),
         "message": message,
         "username": username,
@@ -76,6 +77,11 @@ def receipt(message="Synthetic mail", username="test-agent", *, expires=None, si
         "created_at": now.isoformat(),
         "expires_at": (expires or now + timedelta(hours=2)).isoformat(),
     }
+    if message_type is not None:
+        value["message_type"] = message_type
+    if reply_to is not None:
+        value["reply_to"] = reply_to
+    return value
 
 
 def b64url(value):
@@ -86,7 +92,8 @@ def from_b64url(value):
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def canonical_bytes(token, message, username, nonce, signed_at):
+def canonical_bytes(token, message, username, nonce, signed_at, *,
+                    message_type=None, reply_to=None):
     """Independent Python protocol encoder, including its Unicode handling."""
     payload = {
         "message": message,
@@ -95,24 +102,30 @@ def canonical_bytes(token, message, username, nonce, signed_at):
         "signed_at": signed_at,
         "username": username,
     }
-    return b"agentboard-message-v1\n" + json.dumps(
+    domain = b"agentboard-message-v1\n"
+    if message_type is not None or reply_to is not None:
+        domain = b"psstoffice-message-v2\n"
+        payload.update(message_type=message_type, reply_to=reply_to)
+    return domain + json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
 
 
 def signed_receipt(message="Signed synthetic mail", username="signed-agent", *, key=None,
-                   token=TOKEN_A, expires=None, signed_at=None):
+                   token=TOKEN_A, expires=None, signed_at=None, message_type=None, reply_to=None):
     key = key or Ed25519PrivateKey.generate()
     timestamp = int(time.time()) if signed_at is None else signed_at
     nonce = uuid.uuid4().hex
     signing = {
         "public_key": b64url(key.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw)),
-        "signature": b64url(key.sign(canonical_bytes(token, message, username, nonce, timestamp))),
+        "signature": b64url(key.sign(canonical_bytes(token, message, username, nonce, timestamp,
+                                                      message_type=message_type, reply_to=reply_to))),
         "nonce": nonce,
         "signed_at": timestamp,
     }
-    return receipt(message, username, expires=expires, signing=signing)
+    return receipt(message, username, expires=expires, signing=signing,
+                   message_type=message_type, reply_to=reply_to)
 
 
 def verify_post(post, token=TOKEN_A):
@@ -126,7 +139,8 @@ def verify_post(post, token=TOKEN_A):
     assert len(public) == 32 and b64url(public) == signing["public_key"]
     assert len(signature) == 64 and b64url(signature) == signing["signature"]
     Ed25519PublicKey.from_public_bytes(public).verify(signature, canonical_bytes(
-        token, post["message"], post.get("username"), signing["nonce"], signing["signed_at"]))
+        token, post["message"], post.get("username"), signing["nonce"], signing["signed_at"],
+        message_type=post.get("message_type"), reply_to=post.get("reply_to")))
     return public
 
 
@@ -183,7 +197,8 @@ class MailFixture:
             if self.send_results:
                 result = self.send_results.popleft()
             else:
-                result = (201, receipt(body["message"], body.get("username"), signing=body.get("signing")), {})
+                result = (201, receipt(body["message"], body.get("username"), signing=body.get("signing"),
+                                       message_type=body.get("message_type"), reply_to=body.get("reply_to")), {})
             if callable(result):
                 result = result(body)
             if asyncio.iscoroutine(result):
@@ -905,16 +920,23 @@ async def assert_layout(page):
 
 
 async def test_screenshots(browser):
+    inventory = signed_receipt("The lunar cheese inventory is ready. All 47 wheels accounted for. 🧀",
+                               "lunar-mailbot", message_type="result")
+    dispatch = receipt("Excellent. Please deliver one to the secret picnic.", "captain-whisper",
+                       message_type="task", reply_to=inventory["id"])
     fixture = MailFixture([page_of(
-        signed_receipt("The lunar cheese inventory is ready. All 47 wheels accounted for. 🧀", "lunar-mailbot"),
-        receipt("Excellent. Please deliver one to the secret picnic.", "captain-whisper"),
-        receipt("Parcel dispatched. The delivery pigeon has signed the paperwork. 🕊️", "postmaster-bot"),
+        inventory,
+        dispatch,
+        receipt("Parcel dispatched. The delivery pigeon has signed the paperwork. 🕊️", "postmaster-bot",
+                message_type="result", reply_to=dispatch["id"]),
         receipt("This is a demo conversation. Messages disappear two hours after posting.", None),
     )], status_pages=[{"status": status_receipt("Secret picnic: assembling", "yellow")}])
     async with BrowserCase(browser, fixture, viewport={"width": 1280, "height": 1000}) as case:
         await case.join(username="captain-whisper")
         await expect(case.page.locator("article.message")).to_have_count(4)
         await expect(case.page.locator("#room-status-text")).to_have_text("Secret picnic: assembling")
+        await choose_reply(case.page, dispatch)
+        await case.page.locator("#message-type").select_option("question")
         await case.page.locator("#message-input").fill("One tiny note, on its way…")
         assert await case.page.locator("#active-token").get_attribute("type") == "password"
         await expect(case.page.locator(".signature")).to_have_attribute("data-state", "verified")
@@ -1644,6 +1666,379 @@ async def test_room_status_write_and_manual_check_backoff_blocks_polling(browser
             assert len(fixture.status_updates()) == (1 if operation == "write" else 0), "Backoff retried a status write automatically"
 
 
+def message_row(page, value):
+    return page.locator(f'article.message[data-message-id="{value["id"]}"]')
+
+
+async def choose_reply(page, value):
+    await message_row(page, value).locator(".message-reply").click()
+    await expect(page.locator("#reply-target")).to_be_visible()
+
+
+async def test_reply_types_plain_text_and_parent_navigation(browser):
+    malicious = '<img src=x onerror="window.__reply_xss=true"><script>bad()</script>'
+    parent = receipt(malicious, '<svg onload="window.__reply_xss=true">', message_type="question")
+    child = receipt("The safe answer is cheese.", "answer-agent", message_type="result", reply_to=parent["id"])
+    fixture = MailFixture([page_of(parent, child)])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await expect(p.locator("article.message")).to_have_count(2)
+        await expect(message_row(p, parent).locator(".message-type")).to_have_attribute("data-type", "question")
+        await expect(message_row(p, child).locator(".message-type")).to_have_attribute("data-type", "result")
+        reference = message_row(p, child).locator(".reply-reference")
+        await expect(reference).to_have_attribute("data-reply-to", parent["id"])
+        child_group = await message_row(p, child).get_attribute("data-chatter-id")
+        await p.locator(f'.chatter-button[data-chatter-id={json.dumps(child_group)}]').click()
+        await expect(message_row(p, parent)).not_to_be_visible()
+        await reference.click()
+        await expect(message_row(p, parent)).to_be_visible()
+        await expect(message_row(p, parent)).to_be_focused()
+        await expect(p.locator('.chatter-button[data-chatter-id="all"]')).to_have_attribute("aria-pressed", "true")
+        await choose_reply(p, parent)
+        assert malicious[:40] in await p.locator("#reply-target-text").inner_text()
+        assert await p.locator("#reply-target img, #reply-target svg, #reply-target script").count() == 0
+        assert await p.evaluate("window.__reply_xss === undefined")
+        await p.locator("#message-type").select_option("task")
+        await signed_send(case, "A task explicitly answering this note.")
+        first = fixture.sends()[0]["body"]
+        assert first["message_type"] == "task" and first["reply_to"] == parent["id"]
+        await expect(p.locator("#reply-target")).not_to_be_visible()
+        await expect(p.locator("#message-type")).to_have_value("")
+        for kind in ("result", "question", "error"):
+            await p.locator("#message-type").select_option(kind)
+            await signed_send(case, f"A typed {kind} note.")
+            assert fixture.sends()[-1]["body"]["message_type"] == kind
+            assert fixture.sends()[-1]["body"].get("reply_to") is None
+        await signed_send(case, "A plain note preserves the original API shape.")
+        plain = fixture.sends()[-1]["body"]
+        assert "message_type" not in plain and "reply_to" not in plain
+        await expect(p.locator("article.message")).to_have_count(7)
+        assert "message_type" not in fixture.append_receipts[-1] and "reply_to" not in fixture.append_receipts[-1]
+        assert await p.locator("#messages img, #messages script").count() == 0
+
+
+async def test_reply_parent_expiry_preserves_child_and_blocks_new_draft(browser):
+    parent = receipt("A briefly available parent quote.", "short-lived-parent",
+                     expires=datetime.now(timezone.utc) + timedelta(seconds=12), message_type="task")
+    child = receipt("This child keeps its own two-hour deadline.", "long-lived-child",
+                    message_type="result", reply_to=parent["id"])
+    fixture = MailFixture([page_of(parent, child)])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await expect(p.locator("article.message")).to_have_count(2)
+        await choose_reply(p, parent)
+        await p.locator("#message-input").fill("This draft must not silently lose its reply target.")
+        await p.locator("#message-type").select_option("question")
+        await expect(p.locator("#send-button")).to_be_enabled()
+        await p.clock.fast_forward(13_000)
+        await expect(message_row(p, parent)).not_to_be_attached()
+        await expect(message_row(p, child)).to_be_visible()
+        reference = message_row(p, child).locator(".reply-reference")
+        await expect(reference).to_be_disabled()
+        assert parent["id"] in await reference.inner_text()
+        assert parent["message"] not in await reference.inner_text(), "An expired parent's quoted text survived"
+        await expect(p.locator("#reply-target")).to_be_visible()
+        await expect(p.locator("#send-button")).to_be_disabled()
+        assert parent["message"] not in await p.locator("#reply-target-text").inner_text()
+        assert parent["id"] in await p.locator("#reply-target-text").inner_text()
+        assert not fixture.sends()
+        await p.locator("#cancel-reply").click()
+        await expect(p.locator("#reply-target")).not_to_be_visible()
+        await expect(p.locator("#send-button")).to_be_enabled()
+        await expect(message_row(p, child).locator(".message-expiry")).to_contain_text("2h")
+        await p.clock.fast_forward(7_200_001)
+        await expect(message_row(p, child)).not_to_be_attached()
+
+
+async def test_reply_trimmed_parent_has_honest_reference(browser):
+    parent = receipt("Trimmed parent text must not remain quoted.", "older-agent")
+    middle = [receipt(f"History filler {number}.", "filler-agent") for number in range(298)]
+    child = receipt("This reply survives the local history trim.", "child-agent", reply_to=parent["id"])
+    fixture = MailFixture([
+        page_of(parent, *middle[:99], cursor="reply-trim-one", has_more=True),
+        page_of(*middle[99:199], cursor="reply-trim-two", has_more=True),
+        page_of(*middle[199:], child, cursor="reply-trim-three"),
+    ])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await expect(p.locator("article.message")).to_have_count(300)
+        await choose_reply(p, parent)
+        await p.locator("#message-input").fill("Keep the target ID after local trim.")
+        await wait_until(lambda: any(not future.done() for _, future in fixture.pending_reads))
+        fixture.release(page_of(receipt("One new note trims the oldest."), cursor="reply-trim-four"))
+        await expect(message_row(p, parent)).not_to_be_attached()
+        reference = message_row(p, child).locator(".reply-reference")
+        await expect(reference).to_be_disabled()
+        assert parent["id"] in await reference.inner_text()
+        assert parent["message"] not in await p.locator("#messages").inner_text()
+        await expect(p.locator("#send-button")).to_be_disabled()
+        assert parent["message"] not in await p.locator("#reply-target-text").inner_text()
+        await p.locator("#cancel-reply").click()
+        await expect(p.locator("#send-button")).to_be_enabled()
+
+
+async def test_signed_structured_reply_unicode_interop(browser):
+    parent = receipt("Which Unicode parcel should be delivered?", "request-agent", message_type="question")
+    fixture = MailFixture([page_of(parent)])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join(username='snowman ☃️ "\\\t')
+        public = await make_key(p)
+        await p.locator("#close-key").click()
+        await choose_reply(p, parent)
+        await p.locator("#message-type").select_option("result")
+        enriched = await signed_send(case, 'Answer "yes"; slash \\; controls \b\f\n\t\x00; emoji 🧀; lines \u2028\u2029.')
+        assert enriched["message_type"] == "result" and enriched["reply_to"] == parent["id"]
+        assert b64url(verify_post(enriched)) == public
+        encoded = canonical_bytes(TOKEN_A, enriched["message"], enriched.get("username"),
+                                  enriched["signing"]["nonce"], enriched["signing"]["signed_at"],
+                                  message_type="result", reply_to=parent["id"])
+        assert encoded.startswith(b"psstoffice-message-v2\n")
+        assert json.loads(encoded.split(b"\n", 1)[1])["reply_to"] == parent["id"]
+        await expect(p.locator("article.message.own .signature")).to_have_attribute("data-state", "verified")
+        await p.locator("#message-type").select_option("task")
+        typed = await signed_send(case, "A type alone also authenticates both metadata fields.")
+        verify_post(typed)
+        typed_json = json.loads(canonical_bytes(TOKEN_A, typed["message"], typed.get("username"),
+                               typed["signing"]["nonce"], typed["signing"]["signed_at"],
+                               message_type="task").split(b"\n", 1)[1])
+        assert typed_json["message_type"] == "task" and typed_json["reply_to"] is None
+        await choose_reply(p, parent)
+        replied = await signed_send(case, "A reply alone remains authenticated.")
+        verify_post(replied)
+        assert replied.get("message_type") is None and replied["reply_to"] == parent["id"]
+        plain = await signed_send(case, "A legacy plain signed note uses the unchanged v1 domain.")
+        verify_post(plain)
+        assert canonical_bytes(TOKEN_A, plain["message"], plain.get("username"),
+                               plain["signing"]["nonce"], plain["signing"]["signed_at"]).startswith(
+                                   b"agentboard-message-v1\n")
+
+
+async def test_reply_signature_metadata_tampering_and_downgrade(browser):
+    key = Ed25519PrivateKey.generate()
+    parent = receipt("Parent for authentication checks.", "parent-agent")
+    legacy = signed_receipt("Legacy signed plain text.", "trusted-agent", key=key)
+    typed = signed_receipt("Authenticated type.", "trusted-agent", key=key, message_type="task")
+    replied = signed_receipt("Authenticated reply.", "trusted-agent", key=key, reply_to=parent["id"])
+    both = signed_receipt("Authenticated type and reply.", "trusted-agent", key=key,
+                          message_type="result", reply_to=parent["id"])
+    wrong_type = signed_receipt("Tampered type must be untrusted.", "trusted-agent", key=key,
+                                message_type="task", reply_to=parent["id"])
+    wrong_type["message_type"] = "error"
+    wrong_reply = signed_receipt("Tampered reply must be untrusted.", "trusted-agent", key=key,
+                                 message_type="result", reply_to=parent["id"])
+    wrong_reply["reply_to"] = str(uuid.uuid4())
+    stripped = signed_receipt("Stripped metadata must not downgrade to v1.", "trusted-agent", key=key,
+                              message_type="result", reply_to=parent["id"])
+    del stripped["message_type"]
+    del stripped["reply_to"]
+    added_type = signed_receipt("A v1 signature cannot acquire a type.", "trusted-agent", key=key)
+    added_type["message_type"] = "question"
+    added_reply = signed_receipt("A v1 signature cannot acquire a reply.", "trusted-agent", key=key)
+    added_reply["reply_to"] = parent["id"]
+    valid = [legacy, typed, replied, both]
+    forged = [wrong_type, wrong_reply, stripped, added_type, added_reply]
+    fixture = MailFixture([page_of(parent, *valid, *forged)])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await expect(p.locator("article.message")).to_have_count(10)
+        for value in valid:
+            await expect(message_row(p, value).locator(".signature")).to_have_attribute("data-state", "verified")
+        trusted_group = await message_row(p, legacy).get_attribute("data-chatter-id")
+        for value in forged:
+            await expect(message_row(p, value).locator(".signature")).to_have_attribute("data-state", "invalid")
+            assert trusted_group != await message_row(p, value).get_attribute("data-chatter-id")
+        await p.locator(f'.chatter-button[data-chatter-id={json.dumps(trusted_group)}]').click()
+        await expect(p.locator("article.message:visible")).to_have_count(4)
+
+
+async def test_reply_retry_freezes_metadata_after_parent_expiry(browser):
+    parent = receipt("A parent that expires while acknowledgement is lost.", "parent-agent",
+                     expires=datetime.now(timezone.utc) + timedelta(seconds=12))
+    original = {}
+
+    def lose_reply(body):
+        original["receipt"] = receipt(body["message"], body.get("username"), signing=body["signing"],
+                                     message_type=body["message_type"], reply_to=body["reply_to"])
+        return "abort"
+
+    fixture = MailFixture([page_of(parent)], send_results=[lose_reply, lambda body: (201, original["receipt"], {})],
+                          publish_appends=False)
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        public = await make_key(p)
+        await p.locator("#close-key").click()
+        await choose_reply(p, parent)
+        await p.locator("#message-type").select_option("question")
+        await p.locator("#message-input").fill("The immutable typed reply must survive an uncertain delivery.")
+        await p.locator("#send-button").click()
+        await expect(p.locator("#retry-send")).to_be_visible()
+        first = fixture.sends()[0]["body"]
+        verify_post(first)
+        await expect(p.locator("#message-type")).to_be_disabled()
+        await expect(p.locator("#cancel-reply")).to_be_disabled()
+        await expect(p.locator("#message-input")).to_have_attribute("readonly", "")
+        await p.clock.fast_forward(310_000)
+        await expect(message_row(p, parent)).not_to_be_attached()
+        await expect(p.locator("#retry-send")).to_be_enabled()
+        await p.locator("#retry-send").click()
+        await wait_until(lambda: len(fixture.sends()) == 2)
+        second = fixture.sends()[1]["body"]
+        assert b64url(verify_post(second)) == public
+        for field in ("message", "username", "client_message_id", "message_type", "reply_to"):
+            assert second[field] == first[field], f"Retry changed {field}"
+        assert second["signing"]["nonce"] != first["signing"]["nonce"]
+        assert second["signing"]["signed_at"] >= first["signing"]["signed_at"] + 300
+        await expect(p.locator("#pending-notice")).not_to_be_visible()
+        await expect(p.locator("#message-type")).to_have_value("")
+        await expect(p.locator("#reply-target")).not_to_be_visible()
+        # Advancing five minutes can time out older held long polls. Deliver
+        # to every held synthetic request and queue the same server page for
+        # the reader's next request; duplicate receipt IDs are harmless.
+        delivery = page_of(original["receipt"], cursor="retry-reply-delivery")
+        fixture.read_pages.append(delivery)
+        for _, future in fixture.pending_reads:
+            if not future.done():
+                future.set_result(delivery)
+        await p.clock.fast_forward(5_000)
+        await expect(message_row(p, original["receipt"]).locator(".signature")).to_have_attribute("data-state", "verified")
+        await expect(message_row(p, original["receipt"]).locator(".reply-reference")).to_be_disabled()
+        assert original["receipt"]["expires_at"] != parent["expires_at"]
+
+
+async def test_reply_acknowledgement_must_match_metadata(browser):
+    for change in ("type", "target", "strip", "plain-added"):
+        parent = receipt("A parent for exact acknowledgements.")
+
+        def mismatch(body):
+            value = receipt(body["message"], body.get("username"),
+                            message_type=body.get("message_type"), reply_to=body.get("reply_to"))
+            if change == "type":
+                value["message_type"] = "error"
+            elif change == "target":
+                value["reply_to"] = str(uuid.uuid4())
+            elif change == "strip":
+                value.pop("message_type")
+                value.pop("reply_to")
+            else:
+                value["message_type"] = "task"
+            return (201, value, {})
+
+        fixture = MailFixture([page_of(parent)], send_results=[mismatch], publish_appends=False)
+        async with BrowserCase(browser, fixture) as case:
+            p = case.page
+            await case.join()
+            if change != "plain-added":
+                await choose_reply(p, parent)
+                await p.locator("#message-type").select_option("result")
+            draft = "Only the exact metadata can acknowledge this note."
+            await p.locator("#message-input").fill(draft)
+            await p.locator("#send-button").click()
+            await expect(p.locator("#pending-notice")).to_be_visible()
+            await expect(p.locator("#message-input")).to_have_value(draft)
+            assert await p.locator("article.message.own").count() == 0
+            assert len(fixture.sends()) == 1
+
+
+async def test_reply_rejects_malformed_metadata_and_missing_parent_ack(browser):
+    for field, invalid in (("message_type", "urgent"), ("message_type", 1),
+                           ("message_type", ["task"]), ("reply_to", "not-a-uuid"),
+                           ("reply_to", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"), ("reply_to", {"id": str(uuid.uuid4())})):
+        bad = receipt("Invalid metadata must not be rendered.")
+        bad[field] = invalid
+        fixture = MailFixture([page_of(bad)])
+        async with BrowserCase(browser, fixture) as case:
+            await case.join()
+            await expect(case.page.locator("#read-notice")).to_be_visible()
+            assert await case.page.locator("article.message").count() == 0
+            assert bad["message"] not in await case.page.locator("#messages").inner_text()
+    parent = receipt("Server-side parent expiry can race the composer.")
+    fixture = MailFixture([page_of(parent)], send_results=[(
+        404, {"error": {"code": "reply_unavailable", "message": "The referenced message is unavailable."}}, {})])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await choose_reply(p, parent)
+        await p.locator("#message-type").select_option("question")
+        draft = "Keep my draft when its target disappears on the server."
+        await p.locator("#message-input").fill(draft)
+        await p.locator("#send-button").click()
+        await expect(p.locator("#composer-error")).not_to_have_text("")
+        await expect(p.locator("#pending-notice")).not_to_be_visible()
+        await expect(p.locator("#message-input")).to_have_value(draft)
+        await expect(p.locator("#cancel-reply")).to_be_enabled()
+        assert len(fixture.sends()) == 1
+
+
+async def test_reply_composer_responsive_and_leave_clears_metadata(browser):
+    parent = receipt("A very long synthetic parent " + "🧀" * 120, "parent-agent" * 5, message_type="task")
+    fixture = MailFixture([page_of(parent)], send_results=["abort"])
+    async with BrowserCase(browser, fixture, viewport={"width": 390, "height": 844}) as case:
+        p = case.page
+        await case.join()
+        await choose_reply(p, parent)
+        await p.locator("#message-type").select_option("result")
+        await p.locator("#message-input").fill("This typed reply stays reachable on a small screen.")
+        for viewport in ({"width": 390, "height": 844}, {"width": 844, "height": 390}, {"width": 390, "height": 320}):
+            await p.set_viewport_size(viewport)
+            await assert_layout(p)
+            assert await p.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            target = await p.locator("#reply-target").bounding_box()
+            assert target and target["y"] + target["height"] <= viewport["height"]
+            for selector in ("#send-button", "#message-type"):
+                control = await p.locator(selector).bounding_box()
+                assert control and control["y"] >= 0 and control["y"] + control["height"] <= viewport["height"], \
+                    f"The active reply hid {selector} below the viewport"
+        await p.locator("#send-button").click()
+        await expect(p.locator("#pending-notice")).to_be_visible()
+        await assert_layout(p)
+        await p.locator("#leave-room").click()
+        fixture.read_pages.append(page_of(receipt("A fresh room starts plain.", "fresh-agent"), cursor="fresh-reply-room"))
+        await case.join(TOKEN_B)
+        await expect(p.locator("#message-type")).to_have_value("")
+        await expect(p.locator("#reply-target")).not_to_be_visible()
+        await expect(p.locator("#pending-notice")).not_to_be_visible()
+        assert parent["id"] not in await p.locator("#chat-view").inner_html()
+        assert parent["message"] not in await p.locator("#chat-view").inner_text()
+        await signed_send(case, "Plain delivery in the new room.")
+        assert fixture.sends()[-1]["body"].get("reply_to") is None
+        assert fixture.sends()[-1]["body"].get("message_type") is None
+        assert fixture.sends()[-1]["headers"]["x-room-token"] == TOKEN_B
+
+
+async def test_leaving_during_enriched_signing_does_not_revive_reply(browser):
+    parent = receipt("An old room's reply target.", "old-room-agent")
+    fixture = MailFixture([page_of(parent)])
+    async with BrowserCase(browser, fixture, init_script=HOLD_CRYPTO) as case:
+        p = case.page
+        await case.join()
+        await make_key(p)
+        await p.locator("#close-key").click()
+        await choose_reply(p, parent)
+        await p.locator("#message-type").select_option("task")
+        await p.locator("#message-input").fill("Never finish this old-room structured reply.")
+        await p.evaluate("window.__hold_crypto = 'sign'")
+        await p.locator("#send-button").click()
+        await p.wait_for_function("() => window.__held_crypto && typeof window.__release_crypto === 'function'")
+        await p.locator("#leave-room").click()
+        fixture.read_pages.append(page_of(receipt("Only new-room notes survive."), cursor="new-enriched-room"))
+        await case.join(TOKEN_B)
+        await p.evaluate("window.__hold_crypto = ''; window.__release_crypto()")
+        await expect(p.locator("article.message")).to_have_count(1)
+        await expect(p.locator("#reply-target")).not_to_be_visible()
+        await expect(p.locator("#message-type")).to_have_value("")
+        assert not fixture.sends(), "An old-room sign completion sent a note after leaving"
+        assert parent["id"] not in await p.locator("#chat-view").inner_html()
+        assert parent["message"] not in await p.locator("#messages").inner_text()
+
+
 async def main():
     tests = [
         test_token_and_privacy,
@@ -1685,6 +2080,16 @@ async def main():
         test_room_status_backoff_and_unconfirmed_write,
         test_room_status_rejects_malformed_server_receipts,
         test_room_status_write_and_manual_check_backoff_blocks_polling,
+        test_reply_types_plain_text_and_parent_navigation,
+        test_reply_parent_expiry_preserves_child_and_blocks_new_draft,
+        test_reply_trimmed_parent_has_honest_reference,
+        test_signed_structured_reply_unicode_interop,
+        test_reply_signature_metadata_tampering_and_downgrade,
+        test_reply_retry_freezes_metadata_after_parent_expiry,
+        test_reply_acknowledgement_must_match_metadata,
+        test_reply_rejects_malformed_metadata_and_missing_parent_ack,
+        test_reply_composer_responsive_and_leave_clears_metadata,
+        test_leaving_during_enriched_signing_does_not_revive_reply,
     ]
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
     async with async_playwright() as playwright:

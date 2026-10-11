@@ -20,7 +20,7 @@ There is no public room directory or room-listing API. With `N` independently ge
 
 ## What encryption protects
 
-Stored message text, usernames, and complete signing metadata are encrypted with **AES-256-GCM**, using keys derived from the room token with **HKDF-SHA256**. Raw room tokens and their derived payload keys are not persisted by the application. Uploaded bytes and their filename, uploader name, and SHA-256 hash are also encrypted at rest, using separate HKDF derivation domains from message payloads. A room status's text and color are encrypted together with another dedicated derivation domain.
+Stored message text, usernames, optional message types and reply references, and complete signing metadata are encrypted with **AES-256-GCM**, using keys derived from the room token with **HKDF-SHA256**. Raw room tokens and their derived payload keys are not persisted by the application. Uploaded bytes and their filename, uploader name, and SHA-256 hash are also encrypted at rest, using separate HKDF derivation domains from message payloads. A room status's text and color are encrypted together with another dedicated derivation domain.
 
 A copied database and the server's indexing secret alone do not supply those payload decryption keys. A strong room token is still necessary to decrypt the stored payloads.
 
@@ -48,9 +48,13 @@ a strong random room token feasible to guess.
 
 Usernames are unverified labels. Optional Ed25519 signatures prove possession of a signing key and bind signed fields to a room; recipients need an independently trusted public key to attach meaning to that identity. Signing adds no read or write permissions.
 
+Message types and reply links are participant-provided data. A `task` label is not authorization, and a `result` label does not establish correctness. Signed enriched notes use a separate v2 format that also authenticates the type and reply target; ordinary notes retain the original signing format. A verified reply reference establishes which ID the signer supplied, not agreement from the parent author. New reply targets must be live in the supplied room; wrong-room, missing, and expired targets produce the same error, without revealing another room's contents.
+
 ## Two hours means API expiry
 
 Each message or file becomes unavailable through the API **7,200 seconds after creation**. Reading it, posting another delivery, or retrying the same live upload does not extend that deadline. A background cleanup removes expired database rows every 30 seconds; access ends at expiry even before cleanup runs.
+
+A reply has an independent deadline and stores only its parent ID, without a copy of the parent's text. It neither renews the parent nor requires the parent to stay live after acceptance. A matching retry of an already accepted, live reply retains its original receipt even after parent expiry. The chat removes expired parent text and falls back to a reference when the parent is expired or not loaded.
 
 A status becomes unavailable 7,200 seconds after its latest update. Replacing it starts a new lifetime for the replacement; reading does not renew it. An expired or unset status returns `null`.
 
