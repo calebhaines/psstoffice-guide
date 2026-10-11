@@ -127,6 +127,33 @@
     .chat-header { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:22px 25px 18px; border-bottom:1px solid var(--line); }
     .chat-header h2 { margin:0; font-size:1.15rem; }
     .chat-header .sub { font-size:.73rem; color:var(--muted); margin-top:5px; }
+    .chat-heading { min-width:0; }
+    .chat-signals { display:flex; flex-direction:column; align-items:flex-end; gap:5px; min-width:0; max-width:58%; }
+    #room-status { display:flex; align-items:center; gap:7px; max-width:100%; padding:6px 9px; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--ink); font-size:.72rem; text-align:left; }
+    #room-status:before { content:""; width:8px; height:8px; flex-shrink:0; border-radius:50%; background:#839087; }
+    #room-status-text { min-width:0; max-height:1.35em; line-height:1.35; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; unicode-bidi:plaintext; }
+    #room-status[data-color="green"] { background:#e6f0d7; border-color:#c3d7af; }
+    #room-status[data-color="green"]:before { background:#3c752d; }
+    #room-status[data-color="red"] { background:#ffe4db; border-color:#edbbaa; }
+    #room-status[data-color="red"]:before { background:#b53e2f; }
+    #room-status[data-color="yellow"] { background:#fff2bf; border-color:#e6d390; }
+    #room-status[data-color="yellow"]:before { background:#9a7513; }
+    #room-status[data-color="blue"] { background:#e0edfa; border-color:#b8d1e9; }
+    #room-status[data-color="blue"]:before { background:#326fac; }
+    #status-input { unicode-bidi:plaintext; }
+    #status-count { margin:7px 0 0; font-size:.7rem; color:var(--muted); }
+    #status-count.over { color:var(--danger); font-weight:750; }
+    .status-colors { display:flex; flex-wrap:wrap; gap:8px; padding:0; margin:18px 0; border:0; }
+    .status-colors legend { font-size:.83rem; font-weight:700; margin-bottom:9px; }
+    .status-colors label { display:flex; align-items:center; gap:6px; margin:0; padding:8px 10px; background:var(--paper); border:1px solid var(--line); border-radius:9px; font-size:.75rem; }
+    .status-colors input { width:14px; height:14px; margin:0; accent-color:var(--ink); }
+    .status-colors label:has(input:checked) { border-color:var(--ink); }
+    .status-colors label:before { content:""; width:7px; height:7px; border-radius:50%; background:#3c752d; }
+    .status-colors label[data-color="red"]:before { background:#b53e2f; }
+    .status-colors label[data-color="yellow"]:before { background:#9a7513; }
+    .status-colors label[data-color="blue"]:before { background:#326fac; }
+    .status-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    #status-error { margin:12px 0 0; }
     .connection { display:flex; align-items:center; gap:7px; font-size:.7rem; white-space:nowrap; }
     .connection:before { content:""; width:7px; height:7px; border-radius:50%; background:#d8b46a; }
     .connection[data-state="connected"]:before { background:#527b43; }
@@ -211,6 +238,7 @@
     .chat-header h2 { font-size:1rem; }
     .chat-header .sub { font-size:.65rem; }
     .connection { font-size:.63rem; }
+    #room-status { font-size:.66rem; padding:5px 7px; gap:5px; }
     #messages { padding:16px; }
     .composer { padding:12px; }
     .composer textarea { min-height:64px; padding:11px 12px 5px; font-size:1rem; }
@@ -266,6 +294,8 @@
     .in-room .room-sidebar { max-height:28vh; max-height:28dvh; padding:8px 12px; gap:8px; }
     .in-room .chat-header { padding:8px 12px; }
     .in-room .chat-header .sub { display:none; }
+    .in-room .chat-signals { gap:3px; }
+    .in-room #room-status { padding:4px 6px; }
     .in-room .composer { padding:6px 10px; }
     .in-room .composer textarea { height:45px; min-height:45px; max-height:45px; resize:none; padding:8px 10px; }
     .in-room .composer-bar { padding:5px 7px; justify-content:flex-end; }
@@ -320,7 +350,7 @@
         <button id="leave-room" type="button" class="secondary">Leave room </button>
       </aside>
       <section class="chat-panel" aria-label="Messages and composer">
-        <header class="chat-header"><div><h2>The conversation</h2><div class="sub"><span id="message-count">0 notes</span> · in server order</div><div id="filter-description" hidden></div></div><div id="connection-status" class="connection" data-state="connecting" role="status">Connecting</div></header>
+        <header class="chat-header"><div class="chat-heading"><h2>The conversation</h2><div class="sub"><span id="message-count">0 notes</span> · in server order</div><div id="filter-description" hidden></div></div><div class="chat-signals"><button id="room-status" type="button" data-color="unset" aria-haspopup="dialog" aria-controls="status-dialog" aria-label="Set room status"><span id="room-status-text">Set room status</span></button><div id="connection-status" class="connection" data-state="connecting" role="status">Connecting</div></div></header>
         <p id="read-notice" hidden role="status"></p>
         <div class="messages-wrap"><div id="messages" role="log" aria-label="Room messages" aria-live="off" tabindex="0"></div><button id="new-messages" type="button" hidden>New notes ↓</button></div>
         <form id="composer-form" class="composer" novalidate>
@@ -349,6 +379,15 @@
     <div class="file-upload"><label for="file-input">Send a small parcel</label><input id="file-input" type="file"><div class="file-upload-row"><span id="file-selection-name">Choose one file. Nothing uploads automatically.</span><button id="upload-file" type="button" class="small" disabled>Upload file</button></div><div id="file-pending" hidden role="status"><p id="file-pending-text"></p><button id="retry-file" type="button" class="small">Retry the same file</button> <button id="discard-file" type="button" class="secondary small" hidden>Clear old attempt</button></div></div>
     <p id="files-status" role="status">Checking the cabinet…</p><p id="files-error" class="error" role="alert"></p><div id="file-list" aria-label="Live room files"></div>
   </dialog>
+  <dialog id="status-dialog" aria-labelledby="status-heading" aria-describedby="status-intro">
+    <div class="dialog-heading"><h2 id="status-heading">A little room signal</h2><button id="close-status" type="button" class="secondary small" aria-label="Close room status dialog">Close</button></div>
+    <p id="status-intro" class="dialog-copy">Anyone with this room token can replace the status. Up to 50 characters, four colors, and two hours from each save. The status is shared and unsigned.</p>
+    <form id="status-form">
+      <label for="status-input">Room status</label><input id="status-input" type="text" autocomplete="off" aria-describedby="status-count status-error" placeholder="The robots are having a tea break"><p id="status-count">0 / 50 characters</p>
+      <fieldset class="status-colors"><legend>Color</legend><label data-color="green"><input type="radio" name="status-color" value="green" checked>Green</label><label data-color="red"><input type="radio" name="status-color" value="red">Red</label><label data-color="yellow"><input type="radio" name="status-color" value="yellow">Yellow</label><label data-color="blue"><input type="radio" name="status-color" value="blue">Blue</label></fieldset>
+      <div class="status-actions"><button id="save-status" type="submit" class="small" disabled>Save room status</button><button id="status-check" type="button" class="secondary small">Check current status</button></div><p id="status-error" class="error" role="alert"></p>
+    </form>
+  </dialog>
   <script>
     "use strict";
     // This file intentionally has no dependencies, storage, analytics, or token URLs.
@@ -361,9 +400,11 @@
     const MAX_FILE_BYTES = 1000000;
     const FILE_POLL_INTERVAL = 15000;
     const FILE_JSON_LIMIT = 524288;
+    const STATUS_POLL_INTERVAL = 15000;
+    const STATUS_COLORS = new Set(["green", "red", "yellow", "blue"]);
     const encoder = new TextEncoder();
     const $ = (id) => document.getElementById(id);
-    const ui = Object.fromEntries(["join-view", "chat-view", "join-form", "room-token", "username", "join-error", "active-token", "active-username", "messages", "message-input", "composer-form", "composer-error", "send-button", "byte-count", "connection-status", "read-notice", "pending-notice", "pending-text", "retry-send", "message-count", "new-messages", "announcements", "site-footer", "signing-toggle", "signing-status", "key-dialog", "manage-key", "generate-key", "import-key", "export-key", "clear-key", "public-key", "copy-public-key", "key-fingerprint", "key-import-text", "key-import-file", "key-error", "chatter-list", "filter-description", "open-files", "files-dialog", "file-input", "upload-file", "file-selection-name", "file-pending", "file-pending-text", "retry-file", "discard-file", "files-status", "files-error", "file-list"].map((id) => [id, $(id)]));
+    const ui = Object.fromEntries(["join-view", "chat-view", "join-form", "room-token", "username", "join-error", "active-token", "active-username", "messages", "message-input", "composer-form", "composer-error", "send-button", "byte-count", "connection-status", "read-notice", "pending-notice", "pending-text", "retry-send", "message-count", "new-messages", "announcements", "site-footer", "signing-toggle", "signing-status", "key-dialog", "manage-key", "generate-key", "import-key", "export-key", "clear-key", "public-key", "copy-public-key", "key-fingerprint", "key-import-text", "key-import-file", "key-error", "chatter-list", "filter-description", "open-files", "files-dialog", "file-input", "upload-file", "file-selection-name", "file-pending", "file-pending-text", "retry-file", "discard-file", "files-status", "files-error", "file-list", "room-status", "room-status-text", "status-dialog", "status-form", "status-input", "status-count", "save-status", "status-check", "status-error"].map((id) => [id, $(id)]));
     let session = null;
     let toastTimer;
     let scrollFrame;
@@ -648,7 +689,7 @@
         return buffer.slice(0, total);
       } finally { buffer.fill(0); reader.releaseLock(); }
     }
-    async function fileRequest(s, path, body, panelController = null, binary = false) {
+    async function fileRequest(s, path, body, panelController = null, binary = false, jsonLimit = FILE_JSON_LIMIT) {
       const controller = new AbortController(); const signals = [s.controller.signal];
       if (panelController) signals.push(panelController.signal);
       const onAbort = () => controller.abort(); let timedOut = false;
@@ -659,7 +700,7 @@
         if (!response.ok) { await response.body?.cancel(); throw new RequestError("http", response.status, retryDelay(response.headers.get("Retry-After"))); }
         const type = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
         if (type !== (binary ? "application/octet-stream" : "application/json")) { await response.body?.cancel(); throw new RequestError("protocol"); }
-        const bytes = await readBoundedBytes(response, binary ? MAX_FILE_BYTES : FILE_JSON_LIMIT);
+        const bytes = await readBoundedBytes(response, binary ? MAX_FILE_BYTES : jsonLimit);
         if (!current(s) || panelController?.signal.aborted) { bytes.fill(0); throw new RequestError("cancelled"); }
         if (binary) return { data: bytes, status: response.status };
         try { return { data: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), status: response.status }; }
@@ -670,6 +711,120 @@
         if (!current(s) || panelController?.signal.aborted) throw new RequestError("cancelled");
         throw new RequestError(timedOut ? "timeout" : "network");
       } finally { clearTimeout(timer); for (const signal of signals) signal.removeEventListener("abort", onAbort); }
+    }
+    function validStatusText(value) {
+      return typeof value === "string" && Array.from(value).length > 0 && Array.from(value).length <= 50 && value.trim().length > 0 && validUnicode(value) && !/[\p{Cc}\p{Cs}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);
+    }
+    function validateStatus(value) {
+      const fields = ["id", "text", "color", "updated_at", "expires_at"];
+      if (!plainObject(value) || Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field)) || typeof value.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.id) || !validStatusText(value.text) || !STATUS_COLORS.has(value.color) || !validFileTime(value.updated_at) || !validFileTime(value.expires_at)) throw new RequestError("protocol");
+      const lifetime = Date.parse(value.expires_at) - Date.parse(value.updated_at);
+      if (lifetime <= 0 || lifetime > RETRY_LIFETIME) throw new RequestError("protocol");
+      return Object.fromEntries(fields.map((field) => [field, value[field]]));
+    }
+    function renderStatus(s) {
+      if (!current(s)) return;
+      const status = s.roomStatus;
+      ui["room-status-text"].textContent = status ? status.text : "Set room status";
+      ui["room-status"].dataset.color = status ? status.color : "unset";
+      const label = status ? "Edit room status: " + status.text + " (" + status.color + ", shared and unsigned)" : "Set room status";
+      ui["room-status"].setAttribute("aria-label", label);
+      ui["room-status"].title = status ? status.text + " · " + status.color + " · expires " + new Date(status.expires_at).toLocaleTimeString() + " · click to edit" : "Anyone with the room token can set a status";
+    }
+    function updateStatusControls(s) {
+      if (!current(s)) return;
+      const count = Array.from(ui["status-input"].value).length;
+      const wait = Math.max(0, Math.ceil((s.statusRetryAt - Date.now()) / 1000));
+      const locked = s.statusBusy || s.statusCheckBusy;
+      ui["status-count"].textContent = count + " / 50 characters";
+      ui["status-count"].classList.toggle("over", count > 50);
+      ui["status-input"].disabled = locked;
+      for (const radio of ui["status-form"].querySelectorAll('input[name="status-color"]')) radio.disabled = locked;
+      ui["save-status"].disabled = locked || s.statusUncertain || wait > 0 || !validStatusText(ui["status-input"].value);
+      ui["save-status"].textContent = s.statusBusy ? "Saving…" : wait > 0 ? "Wait " + wait + "s" : "Save room status";
+      ui["status-check"].disabled = locked || wait > 0;
+      ui["status-check"].textContent = s.statusCheckBusy ? "Checking…" : "Check current status";
+    }
+    function expireStatus(s) {
+      if (!current(s)) return;
+      if (s.roomStatus && Date.parse(s.roomStatus.expires_at) <= Date.now()) { s.roomStatus = null; renderStatus(s); }
+      updateStatusControls(s);
+    }
+    function openStatus(s) {
+      if (!current(s) || ui["status-dialog"].open) return;
+      expireStatus(s); s.statusDialogVersion++;
+      ui["status-input"].value = s.roomStatus?.text || "";
+      for (const radio of ui["status-form"].querySelectorAll('input[name="status-color"]')) radio.checked = radio.value === (s.roomStatus?.color || "green");
+      ui["status-error"].textContent = s.statusUncertain ? "That save could not be confirmed. Check the current status before saving again; nothing will be resent automatically." : "";
+      updateStatusControls(s); ui["status-dialog"].showModal(); ui["status-input"].focus();
+    }
+    function closeStatus() {
+      if (session) session.statusDialogVersion++;
+      ui["status-dialog"].close(); ui["status-input"].value = ""; ui["status-error"].textContent = ""; ui["status-count"].textContent = "0 / 50 characters"; ui["status-count"].classList.remove("over");
+    }
+    async function fetchStatus(s) {
+      const readVersion = ++s.statusReadVersion; const writeVersion = s.statusWriteVersion;
+      const { data, status } = await fileRequest(s, "/v1/status/read", {}, null, false, 4096);
+      if (status !== 200 || !plainObject(data) || Object.keys(data).length !== 1 || !Object.hasOwn(data, "status")) throw new RequestError("protocol");
+      const receipt = data.status === null ? null : validateStatus(data.status);
+      if (!current(s) || s.statusReadVersion !== readVersion || s.statusWriteVersion !== writeVersion || s.statusBusy) return false;
+      s.roomStatus = receipt && Date.parse(receipt.expires_at) > Date.now() ? receipt : null; renderStatus(s);
+      return true;
+    }
+    async function statusLoop(s) {
+      let failures = 0;
+      while (current(s)) {
+        let delay = STATUS_POLL_INTERVAL;
+        try {
+          const wait = Math.max(0, s.statusRetryAt - Date.now());
+          if (wait > 0) delay = wait;
+          else if (!s.statusBusy && !s.statusCheckBusy) {
+            await fetchStatus(s); if (!current(s)) return; failures = 0;
+          }
+        } catch (error) {
+          if (!current(s)) return;
+          failures++; delay = Math.max(error.retryAfter || 0, Math.min(30000, 1000 * 2 ** Math.min(failures - 1, 5)));
+          if (error.status === 429 || error.status === 503) s.statusRetryAt = Math.max(s.statusRetryAt, Date.now() + delay);
+          // Room status does not replace the independent mail connection indicator.
+        }
+        try { await sleep(delay, s.controller.signal); } catch { return; }
+      }
+    }
+    async function checkStatus(s) {
+      if (!current(s) || s.statusBusy || s.statusCheckBusy || Date.now() < s.statusRetryAt) return;
+      const dialogVersion = s.statusDialogVersion; s.statusCheckBusy = true; updateStatusControls(s);
+      try {
+        if (!await fetchStatus(s) || !current(s)) return;
+        s.statusUncertain = false;
+        if (ui["status-dialog"].open && s.statusDialogVersion === dialogVersion) ui["status-error"].textContent = s.roomStatus ? "Current status: “" + s.roomStatus.text + "” (" + s.roomStatus.color + "). Your draft is unchanged. Saving it creates a new two-hour status." : "There is no live room status. Your draft is unchanged. Saving it creates a new two-hour status.";
+      } catch (error) {
+        if (!current(s)) return;
+        s.statusRetryAt = Math.max(s.statusRetryAt, Date.now() + (error.retryAfter || 1000));
+        if (ui["status-dialog"].open && s.statusDialogVersion === dialogVersion) ui["status-error"].textContent = "The current status could not be checked. Nothing was saved or resent. Wait, then check again.";
+      } finally { if (current(s)) { s.statusCheckBusy = false; updateStatusControls(s); } }
+    }
+    async function saveStatus(s) {
+      if (!current(s) || s.statusBusy || s.statusCheckBusy || s.statusUncertain || Date.now() < s.statusRetryAt) return;
+      const text = ui["status-input"].value; const color = ui["status-form"].querySelector('input[name="status-color"]:checked')?.value;
+      if (!validStatusText(text) || !STATUS_COLORS.has(color)) { ui["status-error"].textContent = "Use 1–50 Unicode characters with visible text, and choose one of the four colors. Control and direction-changing characters are not allowed."; return; }
+      const dialogVersion = s.statusDialogVersion;
+      // Invalidate reads begun before this write, including ones arriving after its acknowledgement.
+      s.statusWriteVersion++; s.statusBusy = true; ui["status-error"].textContent = ""; updateStatusControls(s);
+      try {
+        const { data, status } = await fileRequest(s, "/v1/status", { text, color }, null, false, 4096);
+        if (status !== 200) throw new RequestError("protocol");
+        const receipt = validateStatus(data);
+        if (receipt.text !== text || receipt.color !== color) throw new RequestError("protocol");
+        if (!current(s)) return;
+        s.statusWriteVersion++; s.roomStatus = Date.parse(receipt.expires_at) > Date.now() ? receipt : null; renderStatus(s);
+        if (ui["status-dialog"].open && s.statusDialogVersion === dialogVersion) closeStatus();
+        toast("Room signal saved. Two hours on the clock."); announce("Room status saved.");
+      } catch (error) {
+        if (!current(s)) return;
+        s.statusRetryAt = Date.now() + (error.retryAfter || 1000);
+        s.statusUncertain = ![400, 413, 422, 429].includes(error.status);
+        if (ui["status-dialog"].open && s.statusDialogVersion === dialogVersion) ui["status-error"].textContent = s.statusUncertain ? "That save could not be confirmed. Check the current status before saving again; nothing will be resent automatically." : error.status === 429 ? "The mailroom is pacing requests. Wait before saving again. Your draft is unchanged." : "The status was rejected. Use 1–50 visible Unicode characters, no controls, and one of the four colors. Your draft is unchanged.";
+      } finally { if (current(s)) { s.statusBusy = false; updateStatusControls(s); } }
     }
     async function fileHash(bytes) {
       if (!globalThis.crypto?.subtle) throw new RequestError("crypto");
@@ -1002,6 +1157,7 @@
       }
       updatePending(s);
       expireFiles(s);
+      expireStatus(s);
     }
     function readErrorText(error) {
       if (error.status === 429) return "The mailroom is pacing requests. Waiting before checking again.";
@@ -1113,7 +1269,7 @@
     }
     function startSession(token, username) {
       if (session) leaveRoom();
-      const s = { token, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set() };
+      const s = { token, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set(), roomStatus: null, statusBusy: false, statusCheckBusy: false, statusUncertain: false, statusRetryAt: 0, statusReadVersion: 0, statusWriteVersion: 0, statusDialogVersion: 0 };
       session = s;
       ui["signing-toggle"].checked = false; clearImportFields(); ui["key-error"].textContent = "";
       s.supportPromise = supportsEd25519(s).then((supported) => { if (current(s)) { s.cryptoSupport = supported; refreshKeyUI(s); } return supported; });
@@ -1123,14 +1279,18 @@
       ui["join-view"].hidden = true; ui["chat-view"].hidden = false; ui["site-footer"].hidden = true;
       document.body.classList.add("in-room");
       setConnection(s, "connecting", "Connecting"); emptyState(s); refreshEmpty(s); updatePending(s); updateFileControls(s);
+      renderStatus(s); updateStatusControls(s);
       s.expiryTimer = setInterval(() => expireMessages(s), 1000);
-      ui["message-input"].focus(); void readLoop(s);
+      ui["message-input"].focus(); void readLoop(s); void statusLoop(s);
     }
     function leaveRoom() {
       const s = session;
       if (!s) return;
       session = null; s.controller.abort(); clearInterval(s.expiryTimer); cancelAnimationFrame(scrollFrame); clearTimeout(toastTimer);
       clearFiles(s);
+      s.roomStatus = null; s.statusWriteVersion++; s.statusReadVersion++; s.statusBusy = false; s.statusCheckBusy = false; s.statusUncertain = false; s.statusRetryAt = 0; closeStatus();
+      ui["room-status-text"].textContent = "Set room status"; ui["room-status"].dataset.color = "unset"; ui["room-status"].setAttribute("aria-label", "Set room status"); ui["room-status"].removeAttribute("title");
+      ui["status-input"].disabled = false; for (const radio of ui["status-form"].querySelectorAll('input[name="status-color"]')) { radio.disabled = false; radio.checked = radio.value === "green"; } ui["save-status"].disabled = true; ui["save-status"].textContent = "Save room status"; ui["status-check"].disabled = false; ui["status-check"].textContent = "Check current status";
       s.token = ""; s.pending = null; s.cursor = null; s.messages.clear(); s.elements.clear(); s.ownIds.clear(); s.order.length = 0;
       s.keyVersion++; s.key = null; s.keyBusy = false; s.verificationKeys.clear(); s.selectedChatter = "all"; s.selectedChatterInfo = null;
       if (ui["key-dialog"].open) ui["key-dialog"].close(); clearImportFields();
@@ -1173,6 +1333,13 @@
     $("reveal-token").addEventListener("click", () => { const show = ui["active-token"].type === "password"; ui["active-token"].type = show ? "text" : "password"; $("reveal-token").textContent = show ? "Hide" : "Show"; $("reveal-token").setAttribute("aria-pressed", String(show)); });
     $("copy-token").addEventListener("click", () => { void copyToken(); });
     $("leave-room").addEventListener("click", leaveRoom);
+    ui["room-status"].addEventListener("click", () => { if (session) openStatus(session); });
+    $("close-status").addEventListener("click", closeStatus);
+    ui["status-dialog"].addEventListener("cancel", (event) => { event.preventDefault(); closeStatus(); });
+    ui["status-dialog"].addEventListener("close", () => { if (!ui["status-dialog"].open) { ui["status-input"].value = ""; ui["status-error"].textContent = ""; } });
+    ui["status-input"].addEventListener("input", () => { if (session) { ui["status-error"].textContent = session.statusUncertain ? "That save could not be confirmed. Check the current status before saving again; nothing will be resent automatically." : ""; updateStatusControls(session); } });
+    ui["status-form"].addEventListener("submit", (event) => { event.preventDefault(); if (session) void saveStatus(session); });
+    ui["status-check"].addEventListener("click", () => { if (session) void checkStatus(session); });
     ui["open-files"].addEventListener("click", () => { if (session) openFiles(session); });
     $("close-files").addEventListener("click", () => { stopFiles(); ui["files-dialog"].close(); });
     ui["files-dialog"].addEventListener("close", () => { if (!ui["files-dialog"].open) stopFiles(); });

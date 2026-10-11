@@ -35,6 +35,17 @@ EMPTY_PAGE = {"messages": [], "next_cursor": None, "has_more": False}
 EMPTY_FILES = {"files": [], "next_cursor": None, "has_more": False, "next_upload_at": None}
 
 
+def status_receipt(text="Secret picnic ready", color="green", *, expires=None):
+    expiration = expires or datetime.now(timezone.utc) + timedelta(hours=2)
+    return {
+        "id": str(uuid.uuid4()),
+        "text": text,
+        "color": color,
+        "updated_at": (expiration - timedelta(hours=2)).isoformat(),
+        "expires_at": expiration.isoformat(),
+    }
+
+
 def file_receipt(data=b"Synthetic file", filename="secret.txt", username="test-agent", *, expires=None):
     now = datetime.now(timezone.utc)
     return {
@@ -127,7 +138,8 @@ class MailFixture:
     """Hold long polls until a test chooses their outcome."""
 
     def __init__(self, read_pages=None, send_results=None, publish_appends=True,
-                 file_pages=None, upload_results=None, download_results=None):
+                 file_pages=None, upload_results=None, download_results=None,
+                 status_pages=None, status_results=None):
         self.read_pages = deque([EMPTY_PAGE.copy()] if read_pages is None else read_pages)
         self.send_results = deque(send_results or [])
         self.publish_appends = publish_appends
@@ -140,6 +152,9 @@ class MailFixture:
         self.download_results = deque(download_results or [])
         self.file_metadata = {}
         self.file_bytes = {}
+        self.status_pages = deque(status_pages or [])
+        self.status_results = deque(status_results or [])
+        self.room_status = {}
 
     async def handle(self, route):
         request = route.request
@@ -193,6 +208,12 @@ class MailFixture:
                 value = self.file_bytes.get(body["file_id"])
                 result = (200, value, {"Content-Disposition": 'attachment; filename="synthetic.bin"'}) if value is not None else (
                     404, {"error": {"code": "file_not_found", "message": "File is unavailable"}}, {})
+        elif request.url == BASE + "/v1/status/read":
+            result = self.status_pages.popleft() if self.status_pages else {
+                "status": self.room_status.get(headers.get("x-room-token"))}
+        elif request.url == BASE + "/v1/status":
+            result = self.status_results.popleft() if self.status_results else status_receipt(
+                body["text"], body["color"])
         else:
             raise AssertionError(f"Unexpected API route: {request.url}")
         if callable(result):
@@ -212,6 +233,8 @@ class MailFixture:
             token = headers.get("x-room-token")
             self.file_metadata.setdefault(token, {})[value["id"]] = value
             self.file_bytes[value["id"]] = base64.b64decode(body["data_base64"], validate=True)
+        if request.url == BASE + "/v1/status" and status == 200:
+            self.room_status[headers.get("x-room-token")] = value
         if request.url == BASE + "/v1/messages" and status == 201 and self.publish_appends:
             # The UI uses reads to establish insertion order, including its own
             # messages; publishing an append receipt simulates that next read.
@@ -252,6 +275,12 @@ class MailFixture:
 
     def downloads(self):
         return [r for r in self.requests if r["url"].endswith("/files/download")]
+
+    def status_reads(self):
+        return [r for r in self.requests if r["url"].endswith("/status/read")]
+
+    def status_updates(self):
+        return [r for r in self.requests if r["url"].endswith("/status")]
 
     def release(self, result, token=None):
         for record, future in self.pending_reads:
@@ -881,10 +910,11 @@ async def test_screenshots(browser):
         receipt("Excellent. Please deliver one to the secret picnic.", "captain-whisper"),
         receipt("Parcel dispatched. The delivery pigeon has signed the paperwork. 🕊️", "postmaster-bot"),
         receipt("This is a demo conversation. Messages disappear two hours after posting.", None),
-    )])
+    )], status_pages=[{"status": status_receipt("Secret picnic: assembling", "yellow")}])
     async with BrowserCase(browser, fixture, viewport={"width": 1280, "height": 1000}) as case:
         await case.join(username="captain-whisper")
         await expect(case.page.locator("article.message")).to_have_count(4)
+        await expect(case.page.locator("#room-status-text")).to_have_text("Secret picnic: assembling")
         await case.page.locator("#message-input").fill("One tiny note, on its way…")
         assert await case.page.locator("#active-token").get_attribute("type") == "password"
         await expect(case.page.locator(".signature")).to_have_attribute("data-state", "verified")
@@ -1370,6 +1400,250 @@ async def test_file_dialog_keyboard_and_responsive_layout(browser):
         await assert_layout(p)
 
 
+async def open_status(case):
+    await case.page.locator("#room-status").click()
+    await expect(case.page.locator("#status-dialog")).to_be_visible()
+
+
+async def set_status(case, text, color):
+    await open_status(case)
+    await case.page.locator("#status-input").fill(text)
+    await case.page.locator(f'input[name="status-color"][value="{color}"]').check()
+    await case.page.locator("#save-status").click()
+    await expect(case.page.locator("#status-dialog")).not_to_be_visible()
+    await expect(case.page.locator("#room-status-text")).to_have_text(text)
+    await expect(case.page.locator("#room-status")).to_have_attribute("data-color", color)
+
+
+async def test_room_status_unicode_colors_validation_and_privacy(browser):
+    async with BrowserCase(browser) as case:
+        p, fixture = case.page, case.fixture
+        await case.join()
+        await wait_until(lambda: bool(fixture.status_reads()))
+        await expect(p.locator("#room-status")).to_have_attribute("data-color", "unset")
+        assert not fixture.status_updates(), "Joining must not create or refresh a room status"
+        await open_status(case)
+        await p.locator("#status-input").fill("🦉" * 50)
+        assert "50" in await p.locator("#status-count").inner_text()
+        await expect(p.locator("#save-status")).to_be_enabled()
+        for invalid in ["🦉" * 51, "   ", "A deceptive \u202estatus"]:
+            await p.locator("#status-input").fill(invalid)
+            if await p.locator("#save-status").is_enabled():
+                await p.locator("#save-status").click()
+            assert not fixture.status_updates(), "Invalid status reached the API"
+            await expect(p.locator("#status-dialog")).to_be_visible()
+        await p.locator("#close-status").click()
+        colors = {}
+        for color in ["green", "red", "yellow", "blue"]:
+            text = "🦉" * 50 if color == "green" else f"Picnic status: {color}"
+            await set_status(case, text, color)
+            post = fixture.status_updates()[-1]
+            assert post["body"] == {"text": text, "color": color}
+            assert post["headers"]["x-room-token"] == TOKEN_A
+            colors[color] = await p.locator("#room-status").evaluate("el => getComputedStyle(el).backgroundColor")
+        assert len(set(colors.values())) == 4, "Status colors must be visually distinct"
+        assert all(request["body"] == {} for request in fixture.status_reads()), "Reading status must not write or leak the token in JSON"
+        stores = await p.evaluate("({local: localStorage.length, session: sessionStorage.length})")
+        assert stores == {"local": 0, "session": 0}, "Room status must not persist secrets locally"
+        assert TOKEN_A not in p.url
+        for request in await p.evaluate("window.__fetch_checks"):
+            if "/v1/status" in request["url"]:
+                assert request["credentials"] == "omit" and request["redirect"] == "error"
+                assert request["cache"] == "no-store" and request["referrerPolicy"] == "no-referrer"
+
+
+async def test_room_status_plain_text_top_right_and_responsive_dialog(browser):
+    malicious = '<img src=x onerror="window.__status_xss=true">'
+    fixture = MailFixture(status_pages=[{"status": status_receipt(malicious, "red")}])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await expect(p.locator("#room-status-text")).to_have_text(malicious)
+        assert await p.locator("#room-status img, #room-status script").count() == 0
+        assert await p.evaluate("window.__status_xss === undefined")
+        await set_status(case, "W" * 50, "blue")
+        for viewport in [{"width": 1280, "height": 1000}, {"width": 390, "height": 844},
+                         {"width": 844, "height": 390}, {"width": 390, "height": 320}]:
+            await p.set_viewport_size(viewport)
+            await assert_layout(p)
+            indicator = await p.locator("#room-status").bounding_box()
+            header = await p.locator(".chat-header").bounding_box()
+            assert indicator and header and indicator["x"] + indicator["width"] / 2 >= header["x"] + header["width"] / 2
+            assert header["x"] + header["width"] - indicator["x"] - indicator["width"] <= 25, "Room status must sit at the right edge of the chat header"
+            assert indicator["x"] + indicator["width"] <= viewport["width"]
+            assert indicator["y"] >= header["y"] and indicator["y"] + indicator["height"] <= header["y"] + header["height"]
+            await open_status(case)
+            assert await p.evaluate("document.querySelector('#status-dialog').contains(document.activeElement)")
+            dialog = await p.locator("#status-dialog").bounding_box()
+            close = await p.locator("#close-status").bounding_box()
+            assert dialog and 0 <= dialog["x"] and 0 <= dialog["y"]
+            assert dialog["x"] + dialog["width"] <= viewport["width"]
+            assert dialog["y"] + dialog["height"] <= viewport["height"]
+            assert close and 0 <= close["y"] and close["y"] + close["height"] <= viewport["height"]
+            await p.keyboard.press("Escape")
+            await expect(p.locator("#status-dialog")).not_to_be_visible()
+            await expect(p.locator("#room-status")).to_be_focused()
+
+
+async def test_room_status_local_expiry_and_reads_do_not_renew(browser):
+    expiration = datetime.now(timezone.utc) + timedelta(seconds=2)
+    current = status_receipt("This flag expires locally", "yellow", expires=expiration)
+    fixture = MailFixture(status_pages=[{"status": current}])
+    fixture.room_status[TOKEN_A] = current
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await expect(p.locator("#room-status-text")).to_have_text(current["text"])
+        await p.clock.fast_forward(2_100)
+        await expect(p.locator("#room-status")).to_have_attribute("data-color", "unset")
+        await p.clock.fast_forward(15_000)
+        await wait_until(lambda: len(fixture.status_reads()) >= 2)
+        await expect(p.locator("#room-status")).to_have_attribute("data-color", "unset")
+        assert current["text"] not in await p.locator("#room-status-text").inner_text(), "Expired response revived the status"
+        assert not fixture.status_updates(), "Reading or expiring a status renewed its deadline"
+
+
+async def test_room_status_older_read_does_not_erase_own_write(browser):
+    held = asyncio.get_running_loop().create_future()
+    async def older_read(body):
+        return await held
+    fixture = MailFixture(status_pages=[older_read])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await wait_until(lambda: bool(fixture.status_reads()))
+        await set_status(case, "Newer confirmed room status", "green")
+        held.set_result({"status": status_receipt("OLDER RESPONSE", "red")})
+        await asyncio.sleep(0.15)
+        await expect(p.locator("#room-status-text")).to_have_text("Newer confirmed room status")
+        await expect(p.locator("#room-status")).to_have_attribute("data-color", "green")
+        fixture.room_status[TOKEN_A] = status_receipt("Another agent changed the flag", "blue")
+        await p.clock.fast_forward(15_100)
+        await wait_until(lambda: len(fixture.status_reads()) >= 2)
+        await expect(p.locator("#room-status-text")).to_have_text("Another agent changed the flag")
+        assert len(fixture.status_updates()) == 1
+
+
+async def test_room_status_stale_read_and_write_after_leaving(browser):
+    for operation in ["read", "write"]:
+        held = asyncio.get_running_loop().create_future()
+        async def held_result(body):
+            return await held
+        old = status_receipt("Old room secret status", "red")
+        new = status_receipt("New room independent status", "blue")
+        fixture = MailFixture(
+            status_pages=[held_result] if operation == "read" else [{"status": old}],
+            status_results=[held_result] if operation == "write" else None)
+        fixture.room_status[TOKEN_B] = new
+        async with BrowserCase(browser, fixture) as case:
+            p = case.page
+            await case.join()
+            await wait_until(lambda: bool(fixture.status_reads()))
+            if operation == "write":
+                await open_status(case)
+                await p.locator("#status-input").fill(old["text"])
+                await p.locator('input[name="status-color"][value="red"]').check()
+                await p.locator("#save-status").click()
+                await wait_until(lambda: bool(fixture.status_updates()))
+                await p.locator("#close-status").click()
+            await p.locator("#leave-room").click()
+            assert await p.locator("#status-input").input_value() == "", "Leaving retained the old status draft"
+            await case.join(TOKEN_B)
+            await expect(p.locator("#room-status-text")).to_have_text(new["text"])
+            held.set_result({"status": old} if operation == "read" else old)
+            await asyncio.sleep(0.15)
+            await expect(p.locator("#room-status-text")).to_have_text(new["text"])
+            await expect(p.locator("#room-status")).to_have_attribute("data-color", "blue")
+            assert "Old room secret status" not in await p.locator("#chat-view").inner_text()
+            assert all(r["headers"]["x-room-token"] == TOKEN_B for r in fixture.status_reads()[1:])
+            await p.locator("#leave-room").click()
+            count = len(fixture.status_reads())
+            await asyncio.sleep(0.2)
+            assert len(fixture.status_reads()) == count, "Leaving did not stop status polling"
+
+
+async def test_room_status_backoff_and_unconfirmed_write(browser):
+    limited = (429, {"error": {"code": "client_busy", "message": "Synthetic quota"}}, {"Retry-After": "2"})
+    initial = status_receipt("Initial room flag", "green")
+    fixture = MailFixture(status_pages=[limited, {"status": initial}])
+    def commit_then_abort(body):
+        fixture.room_status[TOKEN_A] = status_receipt(body["text"], body["color"])
+        return "abort"
+    fixture.status_results.append(commit_then_abort)
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await wait_until(lambda: len(fixture.status_reads()) >= 2, timeout=8)
+        delay = fixture.status_reads()[1]["time"] - fixture.status_reads()[0]["time"]
+        assert delay >= 1.9, f"Status ignored Retry-After: {delay:.3f}s"
+        await expect(p.locator("#room-status-text")).to_have_text(initial["text"])
+        await open_status(case)
+        await p.locator("#status-input").fill("Written but acknowledgement was lost")
+        await p.locator('input[name="status-color"][value="yellow"]').check()
+        await p.locator("#save-status").click()
+        await expect(p.locator("#status-check")).to_be_visible()
+        await expect(p.locator("#save-status")).to_be_disabled()
+        await asyncio.sleep(0.25)
+        assert len(fixture.status_updates()) == 1, "Ambiguous status write was automatically retried"
+        await p.locator("#status-check").click()
+        await expect(p.locator("#room-status-text")).to_have_text("Written but acknowledgement was lost")
+        assert len(fixture.status_updates()) == 1, "Checking latest status rewrote it or extended expiry"
+
+
+async def test_room_status_rejects_malformed_server_receipts(browser):
+    valid = status_receipt("Safe room flag", "green")
+    malformed = [
+        {**valid, "text": "x" * 51},
+        {**valid, "color": "url(javascript:alert(1))"},
+        {**valid, "text": "Misleading \u202eflag"},
+        {**valid, "id": "not-a-uuid"},
+        {**valid, "expires_at": (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()},
+    ]
+    for invalid in malformed:
+        fixture = MailFixture(status_pages=[{"status": invalid}])
+        async with BrowserCase(browser, fixture) as case:
+            await case.join()
+            await wait_until(lambda: bool(fixture.status_reads()))
+            await asyncio.sleep(0.15)
+            await expect(case.page.locator("#room-status")).to_have_attribute("data-color", "unset")
+            assert invalid["text"] not in await case.page.locator("#room-status-text").inner_text()
+            assert not fixture.status_updates()
+
+
+async def test_room_status_write_and_manual_check_backoff_blocks_polling(browser):
+    limited = (429, {"error": {"code": "client_busy", "message": "Synthetic quota"}}, {"Retry-After": "20"})
+    for operation in ["write", "check"]:
+        initial = status_receipt("Existing live status", "green")
+        fixture = MailFixture(status_pages=[{"status": initial}],
+                              status_results=[limited] if operation == "write" else None)
+        fixture.room_status[TOKEN_A] = initial
+        async with BrowserCase(browser, fixture) as case:
+            p = case.page
+            await p.clock.install()
+            await case.join()
+            await expect(p.locator("#room-status-text")).to_have_text(initial["text"])
+            await open_status(case)
+            if operation == "write":
+                await p.locator("#status-input").fill("A paced replacement")
+                await p.locator("#save-status").click()
+                await wait_until(lambda: bool(fixture.status_updates()))
+            else:
+                fixture.status_pages.append(limited)
+                await p.locator("#status-check").click()
+                await wait_until(lambda: len(fixture.status_reads()) == 2)
+            await expect(p.locator("#status-error")).to_contain_text("Wait")
+            await expect(p.locator("#status-check")).to_be_disabled()
+            count = len(fixture.status_reads())
+            await p.clock.fast_forward(15_100)
+            assert len(fixture.status_reads()) == count, "The periodic read bypassed a write/manual-check Retry-After deadline"
+            await expect(p.locator("#save-status")).to_be_disabled()
+            await p.clock.fast_forward(5_100)
+            await wait_until(lambda: len(fixture.status_reads()) > count)
+            assert len(fixture.status_updates()) == (1 if operation == "write" else 0), "Backoff retried a status write automatically"
+
+
 async def main():
     tests = [
         test_token_and_privacy,
@@ -1403,6 +1677,14 @@ async def main():
         test_leaving_during_download_verification_does_not_save,
         test_leaving_during_file_network_does_not_revive_data,
         test_file_dialog_keyboard_and_responsive_layout,
+        test_room_status_unicode_colors_validation_and_privacy,
+        test_room_status_plain_text_top_right_and_responsive_dialog,
+        test_room_status_local_expiry_and_reads_do_not_renew,
+        test_room_status_older_read_does_not_erase_own_write,
+        test_room_status_stale_read_and_write_after_leaving,
+        test_room_status_backoff_and_unconfirmed_write,
+        test_room_status_rejects_malformed_server_receipts,
+        test_room_status_write_and_manual_check_backoff_blocks_polling,
     ]
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
     async with async_playwright() as playwright:
