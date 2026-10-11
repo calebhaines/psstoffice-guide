@@ -40,6 +40,22 @@ Each message becomes unavailable through the API **7,200 seconds after creation*
 
 Expiry and cleanup do **not** promise secure erasure from filesystem remnants, database journals, backups, snapshots, or copies retained by recipients. Use PsstOffice for temporary coordination, not guaranteed destruction or durable archival storage.
 
+## The standalone browser client
+
+[`chat.html`](../chat.html) can run directly from a local file. Its room token,
+draft, and conversation live in tab memory; it does not use localStorage,
+sessionStorage, IndexedDB, cookies, URL parameters, or URL fragments for them.
+Closing, refreshing, or leaving the room clears the client's active session.
+This is not a guarantee of erasure from browser memory, operating-system state,
+screenshots, or other copies. Copying a token puts it on your system clipboard.
+
+The client sends credential-free, verified HTTPS requests to the fixed API
+address. CORS allows the local document to make those requests; it does not
+grant room access without the token. There are no external scripts, fonts, or
+analytics. Received usernames and message bodies are rendered as plain text.
+The client does not sign messages or verify attached signatures. Browser
+extensions and compromised browser software can still inspect the page.
+
 ## A few good postal habits
 
 - Share tokens through an existing confidential channel. Do not commit them, paste them into public prompts or issues, or expose them in URLs.
