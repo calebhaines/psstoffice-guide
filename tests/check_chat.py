@@ -12,6 +12,7 @@ import asyncio
 import base64
 from collections import deque
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,27 @@ BASE = "https://psstoffice.89b84f87.nip.io"
 TOKEN_A = "Aa01" * 16
 TOKEN_B = "Bb02" * 16
 EMPTY_PAGE = {"messages": [], "next_cursor": None, "has_more": False}
+EMPTY_FILES = {"files": [], "next_cursor": None, "has_more": False, "next_upload_at": None}
+
+
+def file_receipt(data=b"Synthetic file", filename="secret.txt", username="test-agent", *, expires=None):
+    now = datetime.now(timezone.utc)
+    return {
+        "id": str(uuid.uuid4()),
+        "filename": filename,
+        "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "username": username,
+        "created_at": now.isoformat(),
+        "expires_at": (expires or now + timedelta(hours=2)).isoformat(),
+    }
+
+
+def files_page(*files, cursor=None, has_more=False, next_upload_at=None):
+    if files and cursor is None:
+        cursor = "synthetic-file-cursor"
+    return {"files": list(files), "next_cursor": cursor, "has_more": has_more,
+            "next_upload_at": next_upload_at}
 
 
 def receipt(message="Synthetic mail", username="test-agent", *, expires=None, signing=None):
@@ -104,7 +126,8 @@ def page_of(*messages, cursor="synthetic-cursor", has_more=False):
 class MailFixture:
     """Hold long polls until a test chooses their outcome."""
 
-    def __init__(self, read_pages=None, send_results=None, publish_appends=True):
+    def __init__(self, read_pages=None, send_results=None, publish_appends=True,
+                 file_pages=None, upload_results=None, download_results=None):
         self.read_pages = deque([EMPTY_PAGE.copy()] if read_pages is None else read_pages)
         self.send_results = deque(send_results or [])
         self.publish_appends = publish_appends
@@ -112,6 +135,11 @@ class MailFixture:
         self.requests = []
         self.pending_reads = []
         self.closed = False
+        self.file_pages = deque(file_pages or [])
+        self.upload_results = deque(upload_results or [])
+        self.download_results = deque(download_results or [])
+        self.file_metadata = {}
+        self.file_bytes = {}
 
     async def handle(self, route):
         request = route.request
@@ -145,8 +173,32 @@ class MailFixture:
                 result = result(body)
             if asyncio.iscoroutine(result):
                 result = await result
+        elif request.url == BASE + "/v1/files/read":
+            if self.file_pages:
+                result = self.file_pages.popleft()
+            else:
+                token = headers.get("x-room-token")
+                result = files_page(*self.file_metadata.get(token, {}).values())
+        elif request.url == BASE + "/v1/files":
+            if self.upload_results:
+                result = self.upload_results.popleft()
+            else:
+                data = base64.b64decode(body["data_base64"], validate=True)
+                metadata = file_receipt(data, body["filename"], body.get("username"))
+                result = (201, metadata, {})
+        elif request.url == BASE + "/v1/files/download":
+            if self.download_results:
+                result = self.download_results.popleft()
+            else:
+                value = self.file_bytes.get(body["file_id"])
+                result = (200, value, {"Content-Disposition": 'attachment; filename="synthetic.bin"'}) if value is not None else (
+                    404, {"error": {"code": "file_not_found", "message": "File is unavailable"}}, {})
         else:
             raise AssertionError(f"Unexpected API route: {request.url}")
+        if callable(result):
+            result = result(body)
+        if asyncio.iscoroutine(result):
+            result = await result
         if result == "abort":
             await route.abort("failed")
             return
@@ -156,6 +208,10 @@ class MailFixture:
             status, value, extra_headers = 200, result, {}
         if request.url == BASE + "/v1/messages" and status == 201:
             self.append_receipts.append(value)
+        if request.url == BASE + "/v1/files" and status == 201:
+            token = headers.get("x-room-token")
+            self.file_metadata.setdefault(token, {})[value["id"]] = value
+            self.file_bytes[value["id"]] = base64.b64decode(body["data_base64"], validate=True)
         if request.url == BASE + "/v1/messages" and status == 201 and self.publish_appends:
             # The UI uses reads to establish insertion order, including its own
             # messages; publishing an append receipt simulates that next read.
@@ -169,8 +225,8 @@ class MailFixture:
         try:
             await route.fulfill(
                 status=status,
-                body=json.dumps(value),
-                content_type="application/json",
+                body=value if isinstance(value, bytes) else json.dumps(value),
+                content_type="application/octet-stream" if isinstance(value, bytes) else "application/json",
                 headers={
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Expose-Headers": "Retry-After",
@@ -183,10 +239,19 @@ class MailFixture:
                 raise
 
     def reads(self):
-        return [r for r in self.requests if r["url"].endswith("/read")]
+        return [r for r in self.requests if r["url"].endswith("/messages/read")]
 
     def sends(self):
         return [r for r in self.requests if r["url"].endswith("/messages")]
+
+    def file_reads(self):
+        return [r for r in self.requests if r["url"].endswith("/files/read")]
+
+    def uploads(self):
+        return [r for r in self.requests if r["url"].endswith("/files")]
+
+    def downloads(self):
+        return [r for r in self.requests if r["url"].endswith("/files/download")]
 
     def release(self, result, token=None):
         for record, future in self.pending_reads:
@@ -785,7 +850,7 @@ async def test_leaving_during_crypto_does_not_revive_secrets(browser):
                     else:
                         await p.locator("#key-import-text").fill(pem)
                         await p.locator("#import-key").click()
-            await p.wait_for_function("window.__held_crypto && typeof window.__release_crypto === 'function'")
+            await p.wait_for_function("() => window.__held_crypto && typeof window.__release_crypto === 'function'")
             if operation in ["generateKey", "importKey"]:
                 await p.locator("#close-key").click()
             await p.locator("#leave-room").click()
@@ -845,6 +910,466 @@ async def test_screenshots(browser):
         await case.page.screenshot(path="/tmp/psstoffice-chat-short-mobile.png", full_page=True)
 
 
+async def open_files(case):
+    await case.page.locator("#open-files").click()
+    await expect(case.page.locator("#files-dialog")).to_be_visible()
+    await wait_until(lambda: bool(case.fixture.file_reads()))
+
+
+async def choose_file(page, data, name="secret.bin", mime="application/octet-stream"):
+    await page.locator("#file-input").set_input_files({
+        "name": name, "mimeType": mime, "buffer": data,
+    })
+
+
+FILE_BLOBS = """
+window.__file_blobs = [];
+const originalObjectURL = URL.createObjectURL.bind(URL);
+URL.createObjectURL = blob => {
+  window.__file_blobs.push({type: blob.type, size: blob.size});
+  return originalObjectURL(blob);
+};
+"""
+
+
+CHUNKED_DOWNLOAD = """
+const originalChunkFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await originalChunkFetch(...args);
+  if (String(args[0]).endsWith('/v1/files/download')) {
+    const headers = new Headers(response.headers);
+    headers.delete('Content-Length');
+    return new Response(response.body, {status: response.status, headers});
+  }
+  return response;
+};
+"""
+
+
+async def test_files_hidden_pagination_and_polling(browser):
+    first = file_receipt(b"one", "first.txt")
+    second = file_receipt(b"two", "second.txt")
+    fixture = MailFixture(file_pages=[
+        files_page(first, cursor="first-file-page", has_more=True),
+        files_page(second, cursor="second-file-page"),
+    ])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await expect(p.locator("#files-dialog")).not_to_be_visible()
+        await p.clock.fast_forward(45_000)
+        assert not fixture.file_reads(), "Closed file browser must not fetch or poll file metadata"
+        await open_files(case)
+        await expect(p.locator("article.file-item")).to_have_count(2)
+        assert fixture.file_reads()[0]["body"].get("after") is None
+        assert fixture.file_reads()[1]["body"]["after"] == "first-file-page"
+        assert all(r["body"]["limit"] <= 100 for r in fixture.file_reads())
+        assert not fixture.downloads(), "Listing files must not fetch file contents"
+        fixture.file_metadata[TOKEN_A] = {first["id"]: first, second["id"]: second}
+        before = len(fixture.file_reads())
+        await p.clock.fast_forward(14_000)
+        assert len(fixture.file_reads()) == before, "File browser polled faster than its 15-second interval"
+        await p.clock.fast_forward(1_100)
+        await wait_until(lambda: len(fixture.file_reads()) == before + 1)
+        await p.locator("#close-files").click()
+        count = len(fixture.file_reads())
+        await p.clock.fast_forward(60_000)
+        assert len(fixture.file_reads()) == count, "Closing file browser must stop polling"
+
+
+async def test_file_upload_receipt_survives_older_list_response(browser):
+    held = asyncio.get_running_loop().create_future()
+    async def old_empty_page(body):
+        return await held
+    fixture = MailFixture(file_pages=[old_empty_page])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        await choose_file(p, b"A newer upload beats an earlier empty listing", "newer.txt")
+        await p.locator("#upload-file").click()
+        await expect(p.locator("article.file-item")).to_have_count(1)
+        held.set_result(EMPTY_FILES.copy())
+        await expect(p.locator("#files-status")).to_contain_text("live file")
+        await expect(p.locator("article.file-item")).to_have_count(1)
+        assert "newer.txt" in await p.locator("#file-list").inner_text(), "An older file listing hid a newly acknowledged upload"
+        await choose_file(p, b"The room still waits for its next slot", "second.txt")
+        await expect(p.locator("#upload-file")).to_be_disabled()
+        assert len(fixture.uploads()) == 1
+
+
+async def test_file_upload_bounds_any_type_and_local_privacy(browser):
+    # Active file formats are transferred as inert bytes, not parsed by the UI.
+    samples = [
+        (bytes(range(256)) * 3906 + bytes(range(64)), "million.bin", "application/octet-stream"),
+        (b"", "empty.txt", "text/plain"),
+        (b'<script>window.__file_executed=true</script>\x00\xff', "postcard.html", "text/html"),
+    ]
+    assert len(samples[0][0]) == 1_000_000
+    for data, filename, mime in samples:
+        async with BrowserCase(browser) as case:
+            p, fixture = case.page, case.fixture
+            await case.join(username="sender \u2603\ufe0f")
+            await open_files(case)
+            assert await p.locator("#file-input").get_attribute("accept") is None, "Any file type should be supported"
+            await choose_file(p, b"x" * 1_000_001, "oversize.bin")
+            if await p.locator("#upload-file").is_enabled():
+                await p.locator("#upload-file").click()
+            assert not fixture.uploads(), "Oversized files must be rejected before a network upload"
+            await choose_file(p, data, filename, mime)
+            await p.locator("#upload-file").click()
+            await wait_until(lambda: len(fixture.uploads()) == 1)
+            await expect(p.locator("#file-pending")).not_to_be_visible()
+            post = fixture.uploads()[0]
+            assert set(post["body"]) == {"filename", "data_base64", "username", "client_file_id"}
+            assert post["body"]["filename"] == filename and post["body"]["username"] == "sender \u2603\ufe0f"
+            assert base64.b64decode(post["body"]["data_base64"], validate=True) == data
+            assert post["body"]["data_base64"] == base64.b64encode(data).decode("ascii")
+            assert re.fullmatch(r"[0-9a-f]{32}", post["body"]["client_file_id"])
+            assert post["headers"]["x-room-token"] == TOKEN_A
+            assert await p.evaluate("window.__file_executed === undefined")
+            assert await p.locator("#file-list iframe, #file-list img, #file-list object, #file-list script").count() == 0
+            assert await p.evaluate("({local: localStorage.length, session: sessionStorage.length})") == {"local": 0, "session": 0}
+            assert await p.evaluate("indexedDB.databases()") == []
+            assert TOKEN_A not in p.url and filename not in p.url
+            for request in await p.evaluate("window.__fetch_checks"):
+                assert request["credentials"] == "omit" and request["redirect"] == "error"
+                assert request["cache"] == "no-store" and request["referrerPolicy"] == "no-referrer"
+            await p.locator("#close-files").click()
+            await p.locator("#message-input").fill("File uploads leave ordinary chat usable.")
+            await p.locator("#send-button").click()
+            await expect(p.locator("#message-input")).to_have_value("")
+
+
+async def test_file_names_render_as_text_and_invalid_names(browser):
+    malicious = '<img src=x onerror="window.__file_xss=true">.html'
+    one = file_receipt(b"one", malicious, '<svg onload="window.__file_xss=true">')
+    two = file_receipt(b"two", "\u90ae\u4fbf \U0001f426.txt", None)
+    fixture = MailFixture(file_pages=[files_page(one, two)])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        await expect(p.locator("article.file-item")).to_have_count(2)
+        assert malicious in await p.locator("#file-list").inner_text()
+        assert "\u90ae\u4fbf \U0001f426.txt" in await p.locator("#file-list").inner_text()
+        assert await p.locator("#file-list img, #file-list svg, #file-list script").count() == 0
+        assert await p.evaluate("window.__file_xss === undefined")
+        await choose_file(p, b"name check", "subfolder\\unsafe\x01.txt")
+        if await p.locator("#upload-file").is_enabled():
+            await p.locator("#upload-file").click()
+            await wait_until(lambda: bool(fixture.uploads()))
+            transmitted = fixture.uploads()[0]["body"]["filename"]
+            assert not re.search(r"[\\/\x00-\x1f\x7f]", transmitted), "File names must be sanitized before upload"
+        else:
+            assert not fixture.uploads(), "Invalid local names should not be uploaded unchanged"
+
+
+async def test_file_cooldown_is_per_room_and_retry_after(browser):
+    cooldown = datetime.now(timezone.utc) + timedelta(seconds=30)
+    limited = (429, {"error": {"code": "file_upload_limited", "message": TOKEN_A + " private bytes"}}, {"Retry-After": "30"})
+    fixture = MailFixture(upload_results=[limited])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await open_files(case)
+        await choose_file(p, b"room A parcel")
+        await p.locator("#upload-file").click()
+        await wait_until(lambda: len(fixture.uploads()) == 1)
+        await expect(p.locator("#retry-file")).to_be_visible()
+        await expect(p.locator("#retry-file")).to_be_disabled()
+        assert TOKEN_A not in await p.locator("#files-dialog").inner_text(), "Errors must not echo server-provided secret text"
+        await p.clock.fast_forward(29_000)
+        assert len(fixture.uploads()) == 1, "A quota failure must not auto-retry"
+        await expect(p.locator("#retry-file")).to_be_disabled()
+        await p.clock.fast_forward(1_100)
+        await expect(p.locator("#retry-file")).to_be_enabled()
+        await p.locator("#close-files").click()
+        await p.locator("#leave-room").click()
+        fixture.file_pages.append(files_page(next_upload_at=None))
+        await case.join(TOKEN_B)
+        await open_files(case)
+        await choose_file(p, b"room B does not share room A quota")
+        await expect(p.locator("#upload-file")).to_be_enabled()
+        await p.locator("#upload-file").click()
+        await wait_until(lambda: len(fixture.uploads()) == 2)
+        assert fixture.uploads()[1]["headers"]["x-room-token"] == TOKEN_B
+        assert fixture.uploads()[1]["body"]["client_file_id"] != fixture.uploads()[0]["body"]["client_file_id"]
+    # An advertised room cooldown also prevents wasting another upload.
+    fixture = MailFixture(file_pages=[files_page(next_upload_at=cooldown.isoformat())])
+    async with BrowserCase(browser, fixture) as case:
+        await case.join()
+        await open_files(case)
+        await choose_file(case.page, b"Wait for this room")
+        await expect(case.page.locator("#upload-file")).to_be_disabled()
+        assert not fixture.uploads()
+
+
+async def test_file_ambiguous_retry_preserves_payload_and_chat(browser):
+    fixture = MailFixture(upload_results=["abort"])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        data = b"An uncertain synthetic file \x00\xff"
+        await choose_file(p, data, "uncertain.bin")
+        await p.locator("#upload-file").click()
+        await expect(p.locator("#retry-file")).to_be_visible()
+        first = fixture.uploads()[0]
+        await expect(p.locator("#file-input")).to_be_disabled()
+        await expect(p.locator("#upload-file")).to_be_disabled()
+        await p.locator("#close-files").click()
+        await expect(p.locator("#message-input")).to_be_editable()
+        await p.locator("#active-username").fill("new-chat-name")
+        await p.locator("#message-input").fill("Keep chatting while a file receipt is uncertain.")
+        await p.locator("#send-button").click()
+        await expect(p.locator("#message-input")).to_have_value("")
+        await p.locator("#open-files").click()
+        await p.locator("#retry-file").click()
+        await wait_until(lambda: len(fixture.uploads()) == 2)
+        assert fixture.uploads()[1]["body"] == first["body"], "File retry must preserve name, bytes, original username and id"
+        await expect(p.locator("#file-pending")).not_to_be_visible()
+
+
+async def test_file_wrong_receipt_and_retry_lifetime(browser):
+    def wrong_receipt(body):
+        value = file_receipt(b"different content", body["filename"], body.get("username"))
+        return (201, value, {})
+    fixture = MailFixture(upload_results=[wrong_receipt])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await open_files(case)
+        await choose_file(p, b"Expected content", "expected.bin")
+        await p.locator("#upload-file").click()
+        await expect(p.locator("#retry-file")).to_be_visible()
+        await expect(p.locator("#file-pending")).to_be_visible()
+        await expect(p.locator("#file-input")).to_be_disabled()
+        await p.clock.fast_forward(7_200_001)
+        await expect(p.locator("#retry-file")).to_be_disabled()
+        await expect(p.locator("#discard-file")).to_be_visible()
+        assert len(fixture.uploads()) == 1, "Expired upload retry must not be sent automatically"
+        await p.locator("#discard-file").click()
+        await expect(p.locator("#file-pending")).not_to_be_visible()
+        await expect(p.locator("#file-input")).to_be_enabled()
+
+
+async def test_file_download_is_explicit_inert_and_verified(browser):
+    data = b'<html><script>window.__download_executed=true</script></html>\x00\xff'
+    metadata = file_receipt(data, "letter.html", "mailbot")
+    fixture = MailFixture(file_pages=[files_page(metadata)], download_results=[
+        (200, data, {"Content-Disposition": 'inline; filename="attacker.js"'})])
+    async with BrowserCase(browser, fixture, init_script=FILE_BLOBS) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        await expect(p.locator("article.file-item")).to_have_count(1)
+        assert not fixture.downloads(), "File content must only be fetched on an explicit download"
+        async with p.expect_download() as download_info:
+            await p.locator(".file-download").click()
+        download = await download_info.value
+        assert download.suggested_filename == "letter.html"
+        saved = Path(await download.path()).read_bytes()
+        assert saved == data and hashlib.sha256(saved).hexdigest() == metadata["sha256"]
+        assert fixture.downloads()[0]["body"] == {"file_id": metadata["id"]}
+        blobs = await p.evaluate("window.__file_blobs")
+        assert blobs[-1] == {"type": "application/octet-stream", "size": len(data)}, "Save every file as inert binary, regardless of original type"
+        assert await p.evaluate("window.__download_executed === undefined")
+        assert TOKEN_A not in p.url and p.url.startswith("file://")
+        assert await p.locator("iframe, object, embed").count() == 0
+
+
+async def test_file_download_rejects_tampered_oversized_or_wrong_type(browser):
+    metadata = file_receipt(b"verified", "trusted.bin")
+    responses = [
+        (200, b"tampered", {}),
+        (200, b"x" * 1_000_001, {}),
+        (200, {"error": {"message": TOKEN_A + " secret file data"}}, {}),
+    ]
+    for response in responses:
+        fixture = MailFixture(file_pages=[files_page(metadata)], download_results=[response])
+        async with BrowserCase(browser, fixture, init_script=FILE_BLOBS + CHUNKED_DOWNLOAD) as case:
+            p = case.page
+            downloads = []
+            p.on("download", lambda value: downloads.append(value))
+            await case.join()
+            await open_files(case)
+            await p.locator(".file-download").click()
+            await expect(p.locator("#files-error")).not_to_have_text("")
+            await asyncio.sleep(0.1)
+            assert not downloads and not await p.evaluate("window.__file_blobs"), "Invalid bytes must never be saved"
+            assert TOKEN_A not in await p.locator("#files-dialog").inner_text()
+
+
+async def test_file_browser_rejects_malformed_metadata(browser):
+    cases = [
+        {"filename": "../unsafe.txt"},
+        {"filename": "hidden\u202eexe.txt"},
+        {"size_bytes": 1_000_001},
+        {"size_bytes": True},
+        {"sha256": "A" * 64},
+        {"extra_field": "untrusted"},
+        {"expires_at": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()},
+    ]
+    for changes in cases:
+        metadata = {**file_receipt(b"metadata"), **changes}
+        fixture = MailFixture(file_pages=[files_page(metadata)])
+        async with BrowserCase(browser, fixture) as case:
+            await case.join()
+            await open_files(case)
+            await expect(case.page.locator("#files-status")).to_contain_text("unexpected")
+            assert await case.page.locator("article.file-item").count() == 0
+            assert not fixture.downloads(), "Malformed file metadata must never create a download control"
+
+
+async def test_file_expiry_is_local_and_prevents_download(browser):
+    metadata = file_receipt(b"short-lived", "soon.txt", expires=datetime.now(timezone.utc) + timedelta(seconds=2))
+    fixture = MailFixture(file_pages=[files_page(metadata)])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await open_files(case)
+        await expect(p.locator("article.file-item")).to_have_count(1)
+        await p.clock.fast_forward(2_100)
+        await expect(p.locator("article.file-item")).to_have_count(0)
+        assert not fixture.downloads()
+        await p.clock.fast_forward(15_000)
+        await expect(p.locator("article.file-item")).to_have_count(0)
+
+
+HOLD_FILE_CRYPTO = """
+window.__hold_file = '';
+window.__held_file = false;
+for (const [owner, operation] of [[File.prototype, 'arrayBuffer'], [crypto.subtle, 'digest']]) {
+  const original = owner[operation];
+  owner[operation] = function (...args) {
+    const result = original.apply(this, args);
+    if (window.__hold_file === operation) {
+      window.__held_file = true;
+      return result.then(value => new Promise(resolve => {
+        window.__release_file = () => resolve(value);
+      }));
+    }
+    return result;
+  };
+}
+"""
+
+
+async def test_leaving_during_file_preparation_does_not_send(browser):
+    for operation in ["arrayBuffer", "digest"]:
+        async with BrowserCase(browser, init_script=HOLD_FILE_CRYPTO) as case:
+            p = case.page
+            await case.join()
+            await open_files(case)
+            await choose_file(p, b"Only old room owns these bytes", "old-room.bin")
+            await p.evaluate("operation => window.__hold_file = operation", operation)
+            await p.locator("#upload-file").click()
+            await p.wait_for_function("() => window.__held_file && typeof window.__release_file === 'function'")
+            await p.locator("#close-files").click()
+            await p.locator("#leave-room").click()
+            await case.join(TOKEN_B)
+            await p.evaluate("window.__hold_file = ''; window.__release_file()")
+            await open_files(case)
+            await expect(p.locator("#file-pending")).not_to_be_visible()
+            assert await p.locator("#file-input").evaluate("input => input.files.length") == 0
+            assert "old-room.bin" not in await p.locator("#files-dialog").inner_text()
+            assert not case.fixture.uploads(), f"Stale {operation} preparation sent old file data into the new room"
+
+
+async def test_leaving_during_download_verification_does_not_save(browser):
+    data = b"Old room file held at its hash check"
+    metadata = file_receipt(data, "held-hash.bin")
+    fixture = MailFixture(file_pages=[files_page(metadata)], download_results=[(200, data, {})])
+    async with BrowserCase(browser, fixture, init_script=HOLD_FILE_CRYPTO + FILE_BLOBS) as case:
+        p = case.page
+        downloads = []
+        p.on("download", lambda value: downloads.append(value))
+        await case.join()
+        await open_files(case)
+        await p.evaluate("window.__hold_file = 'digest'")
+        await p.locator(".file-download").click()
+        await p.wait_for_function("() => window.__held_file && typeof window.__release_file === 'function'")
+        await p.locator("#close-files").click()
+        await p.locator("#leave-room").click()
+        await case.join(TOKEN_B)
+        await p.evaluate("window.__hold_file = ''; window.__release_file()")
+        await asyncio.sleep(0.15)
+        assert not downloads and not await p.evaluate("window.__file_blobs"), "Stale file hash verification saved old room bytes"
+
+
+async def test_leaving_during_file_network_does_not_revive_data(browser):
+    for operation in ["upload", "list", "download"]:
+        metadata = file_receipt(b"old secret bytes", "old-file.bin")
+        held = asyncio.get_running_loop().create_future()
+        async def hold_result(body):
+            return await held
+        fixture = MailFixture(
+            file_pages=[hold_result] if operation == "list" else [files_page(metadata)],
+            upload_results=[hold_result] if operation == "upload" else None,
+            download_results=[hold_result] if operation == "download" else None,
+        )
+        async with BrowserCase(browser, fixture, init_script=FILE_BLOBS) as case:
+            p = case.page
+            downloads = []
+            p.on("download", lambda value: downloads.append(value))
+            await case.join()
+            await open_files(case)
+            if operation == "upload":
+                await choose_file(p, b"old secret bytes", "old-file.bin")
+                await p.locator("#upload-file").click()
+                await wait_until(lambda: bool(fixture.uploads()))
+            elif operation == "download":
+                await expect(p.locator("article.file-item")).to_have_count(1)
+                await p.locator(".file-download").click()
+                await wait_until(lambda: bool(fixture.downloads()))
+            await p.locator("#close-files").click()
+            await p.locator("#leave-room").click()
+            await case.join(TOKEN_B)
+            new_metadata = file_receipt(b"new room", "new-room.txt")
+            fixture.file_pages.append(files_page(new_metadata))
+            await p.locator("#open-files").click()
+            await expect(p.locator("article.file-item")).to_have_count(1)
+            held.set_result((201, metadata, {}) if operation == "upload" else
+                            files_page(metadata) if operation == "list" else
+                            (200, b"old secret bytes", {}))
+            await asyncio.sleep(0.15)
+            assert "old-file.bin" not in await p.locator("#files-dialog").inner_text()
+            assert "new-room.txt" in await p.locator("#files-dialog").inner_text()
+            assert not downloads and not await p.evaluate("window.__file_blobs"), "Old room response triggered a file download"
+            await expect(p.locator("#file-pending")).not_to_be_visible()
+
+
+async def test_file_dialog_keyboard_and_responsive_layout(browser):
+    metadata = file_receipt(b"A file for the secret picnic.", "picnic-instructions.txt", "captain-whisper")
+    fixture = MailFixture(file_pages=[files_page(metadata)])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        assert await p.evaluate("document.querySelector('#files-dialog').contains(document.activeElement)"), "Dialog should receive keyboard focus"
+        for viewport in [{"width": 1280, "height": 1000}, {"width": 390, "height": 844},
+                         {"width": 844, "height": 390}, {"width": 390, "height": 320}]:
+            await p.set_viewport_size(viewport)
+            assert await p.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            dialog = await p.locator("#files-dialog").bounding_box()
+            close = await p.locator("#close-files").bounding_box()
+            assert dialog and dialog["x"] >= 0 and dialog["y"] >= 0
+            assert dialog["x"] + dialog["width"] <= viewport["width"]
+            assert dialog["y"] + dialog["height"] <= viewport["height"]
+            assert close and 0 <= close["y"] and close["y"] + close["height"] <= viewport["height"]
+        await p.set_viewport_size({"width": 1280, "height": 1000})
+        await p.screenshot(path="/tmp/psstoffice-chat-files.png", full_page=True)
+        await p.keyboard.press("Escape")
+        await expect(p.locator("#files-dialog")).not_to_be_visible()
+        await expect(p.locator("#open-files")).to_be_focused()
+        await assert_layout(p)
+
+
 async def main():
     tests = [
         test_token_and_privacy,
@@ -863,6 +1388,21 @@ async def main():
         test_unsupported_signing_keeps_unsigned_chat,
         test_leaving_during_crypto_does_not_revive_secrets,
         test_screenshots,
+        test_files_hidden_pagination_and_polling,
+        test_file_upload_receipt_survives_older_list_response,
+        test_file_upload_bounds_any_type_and_local_privacy,
+        test_file_names_render_as_text_and_invalid_names,
+        test_file_cooldown_is_per_room_and_retry_after,
+        test_file_ambiguous_retry_preserves_payload_and_chat,
+        test_file_wrong_receipt_and_retry_lifetime,
+        test_file_download_is_explicit_inert_and_verified,
+        test_file_download_rejects_tampered_oversized_or_wrong_type,
+        test_file_browser_rejects_malformed_metadata,
+        test_file_expiry_is_local_and_prevents_download,
+        test_leaving_during_file_preparation_does_not_send,
+        test_leaving_during_download_verification_does_not_save,
+        test_leaving_during_file_network_does_not_revive_data,
+        test_file_dialog_keyboard_and_responsive_layout,
     ]
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
     async with async_playwright() as playwright:

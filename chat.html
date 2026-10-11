@@ -97,6 +97,28 @@
     #key-import-text { font-size:.7rem; resize:vertical; min-height:95px; max-height:180px; }
     #key-import-file { font-size:.72rem; padding:8px; margin:8px 0; }
     #key-error { margin:10px 0 0; }
+    .files-section { border-top:1px dashed #173c3a35; padding-top:12px; }
+    #open-files { width:100%; display:flex; justify-content:space-between; align-items:center; text-align:left; }
+    #open-files span { font-weight:500; font-size:.68rem; }
+    #files-dialog { width:min(640px,calc(100% - 28px)); }
+    .file-warning { border:1px solid #ecc6a8; border-radius:10px; padding:11px 13px; background:#fff2e2; font-size:.76rem; line-height:1.5; }
+    .file-upload { border:1px dashed var(--line); border-radius:12px; padding:14px; margin:15px 0; }
+    .file-upload label { margin:0 0 9px; }
+    #file-input { padding:9px; font-size:.76rem; }
+    .file-upload-row { display:flex; gap:10px; align-items:center; justify-content:space-between; margin-top:10px; }
+    #file-selection-name { min-width:0; overflow-wrap:anywhere; unicode-bidi:plaintext; font-size:.71rem; }
+    #upload-file { flex-shrink:0; }
+    #file-pending { border-top:1px dashed var(--line); margin-top:12px; padding-top:12px; font-size:.74rem; line-height:1.5; }
+    #file-pending-text { margin:0 0 9px; }
+    #files-status { font-size:.74rem; line-height:1.5; color:var(--muted); }
+    #files-error { margin:10px 0; }
+    #file-list { display:flex; flex-direction:column; gap:9px; margin:14px 0 0; }
+    .file-item { border:1px solid var(--line); background:var(--paper); border-radius:12px; padding:12px; display:flex; gap:12px; justify-content:space-between; align-items:center; min-width:0; }
+    .file-label { min-width:0; }
+    .file-name { font-weight:750; font-size:.81rem; margin:0 0 5px; overflow-wrap:anywhere; unicode-bidi:plaintext; }
+    .file-info { font-size:.67rem; line-height:1.55; color:var(--muted); white-space:pre-wrap; overflow-wrap:anywhere; unicode-bidi:plaintext; margin:0; }
+    .file-download { flex-shrink:0; }
+    .files-empty { font-size:.8rem; line-height:1.6; color:var(--muted); text-align:center; margin:12px 0; }
     .lifetime { display:flex; align-items:center; gap:12px; padding-top:17px; border-top:1px dashed #173c3a35; }
     .lifetime .clock { font-size:1.8rem; }
     .lifetime strong { display:block; font-size:.9rem; }
@@ -214,6 +236,9 @@
     .room-sidebar .signing-label { font-size:.68rem; }
     #manage-key { padding:5px 8px; font-size:.64rem; }
     #signing-status { font-size:.59rem; margin-top:3px; }
+    .files-section { padding:0; border:0; }
+    #open-files { gap:8px; padding:6px 8px; font-size:.68rem; }
+    #open-files span { font-size:.6rem; }
     .chatter-section { width:100%; }
     .chatter-heading { margin-bottom:5px; }
     .chatter-heading strong { font-size:.68rem; }
@@ -224,6 +249,8 @@
     .chatter-note { display:none; }
     #filter-description { font-size:.61rem; }
     dialog { padding:20px; }
+    .file-item { padding:10px; gap:9px; }
+    .file-download { padding:7px 8px!important; font-size:.69rem!important; }
     }
     @media(max-height:560px) {
     .in-room .site-header { display:none; }
@@ -285,8 +312,9 @@
         <div class="token-section"><label for="active-token">Room token</label><input id="active-token" type="password" readonly class="mono" autocomplete="off" spellcheck="false"><div class="token-actions"><button id="reveal-token" type="button" class="secondary small" aria-pressed="false">Show</button><button id="copy-token" type="button" class="secondary small">Copy token</button></div></div>
         <div class="username-section"><label for="active-username">Posting as <span class="quiet">(optional)</span></label><input id="active-username" autocomplete="off" placeholder="Anonymous"></div>
         <div class="signing-section"><div class="signing-row"><label class="signing-label" for="signing-toggle"><input id="signing-toggle" type="checkbox" disabled>Sign my notes</label><button id="manage-key" type="button" class="secondary small">Signing key</button></div><p id="signing-status">Optional. Your private key stays in this window.</p></div>
+        <div class="files-section"><button id="open-files" type="button" class="secondary small" aria-haspopup="dialog" aria-controls="files-dialog">Files <span>The little filing cabinet ↗</span></button></div>
         <section class="chatter-section" aria-label="Filter by chatter"><div class="chatter-heading"><strong>Chatter browser</strong><span class="eyebrow" aria-hidden="true">Who's writing?</span></div><div id="chatter-list" aria-label="Chatters"></div><p class="chatter-note">Counts cover loaded, live notes only. This isn't an online-users list. Signed chatters are grouped by verified key; other names are unverified.</p></section>
-        <p class="fine-print">Share this token through a private channel. It grants read and write access. The live server receives your token and message text; this is not end-to-end encryption.</p>
+        <p class="fine-print">Share this token through a private channel. It grants read and write access. The live server receives your token, notes and files; this is not end-to-end encryption.</p>
         <div class="spacer"></div>
         <div class="lifetime"><div class="clock" aria-hidden="true">◷</div><div><strong>Here for two hours.</strong><span>Each note has its own little deadline.</span></div></div>
         <button id="leave-room" type="button" class="secondary">Leave room </button>
@@ -314,6 +342,13 @@
     <label for="public-key">Public key <span class="quiet">(safe to share)</span></label><input id="public-key" class="mono" readonly autocomplete="off" placeholder="Generate or import a key"><p id="key-fingerprint" class="mono"></p><button id="copy-public-key" type="button" class="secondary small" disabled>Copy public key</button>
     <label for="key-import-text">Bring an existing private key</label><textarea id="key-import-text" class="mono" rows="4" placeholder="Paste an Ed25519 PKCS8 PEM private key" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea><label class="sr-only" for="key-import-file">Or select an Ed25519 PEM file</label><input id="key-import-file" type="file" accept=".pem,.key,text/plain,application/x-pem-file"><button id="import-key" type="button" class="secondary small">Import key</button><p id="key-error" class="error" role="alert"></p>
   </dialog>
+  <dialog id="files-dialog" aria-labelledby="files-heading" aria-describedby="files-intro files-warning">
+    <div class="dialog-heading"><h2 id="files-heading">The little filing cabinet</h2><button id="close-files" type="button" class="secondary small" aria-label="Close file browser">Close</button></div>
+    <p id="files-intro" class="dialog-copy">Any file type, up to 1 MB (1,000,000 bytes). Each room can receive one new file every 30 seconds. Each file disappears from the room after two hours. Downloaded copies stay on your device.</p>
+    <p id="files-warning" class="file-warning">Files are untrusted. Download only from someone you trust; opening files can be unsafe. Files and their uploader names are unsigned. “Sign my notes” applies to chat notes only. Files are never previewed here.</p>
+    <div class="file-upload"><label for="file-input">Send a small parcel</label><input id="file-input" type="file"><div class="file-upload-row"><span id="file-selection-name">Choose one file. Nothing uploads automatically.</span><button id="upload-file" type="button" class="small" disabled>Upload file</button></div><div id="file-pending" hidden role="status"><p id="file-pending-text"></p><button id="retry-file" type="button" class="small">Retry the same file</button> <button id="discard-file" type="button" class="secondary small" hidden>Clear old attempt</button></div></div>
+    <p id="files-status" role="status">Checking the cabinet…</p><p id="files-error" class="error" role="alert"></p><div id="file-list" aria-label="Live room files"></div>
+  </dialog>
   <script>
     "use strict";
     // This file intentionally has no dependencies, storage, analytics, or token URLs.
@@ -323,9 +358,12 @@
     const RETRY_LIFETIME = 7200 * 1000;
     const SIGNING_FRESHNESS = 300;
     const MAX_KEY_BYTES = 4096;
+    const MAX_FILE_BYTES = 1000000;
+    const FILE_POLL_INTERVAL = 15000;
+    const FILE_JSON_LIMIT = 524288;
     const encoder = new TextEncoder();
     const $ = (id) => document.getElementById(id);
-    const ui = Object.fromEntries(["join-view", "chat-view", "join-form", "room-token", "username", "join-error", "active-token", "active-username", "messages", "message-input", "composer-form", "composer-error", "send-button", "byte-count", "connection-status", "read-notice", "pending-notice", "pending-text", "retry-send", "message-count", "new-messages", "announcements", "site-footer", "signing-toggle", "signing-status", "key-dialog", "manage-key", "generate-key", "import-key", "export-key", "clear-key", "public-key", "copy-public-key", "key-fingerprint", "key-import-text", "key-import-file", "key-error", "chatter-list", "filter-description"].map((id) => [id, $(id)]));
+    const ui = Object.fromEntries(["join-view", "chat-view", "join-form", "room-token", "username", "join-error", "active-token", "active-username", "messages", "message-input", "composer-form", "composer-error", "send-button", "byte-count", "connection-status", "read-notice", "pending-notice", "pending-text", "retry-send", "message-count", "new-messages", "announcements", "site-footer", "signing-toggle", "signing-status", "key-dialog", "manage-key", "generate-key", "import-key", "export-key", "clear-key", "public-key", "copy-public-key", "key-fingerprint", "key-import-text", "key-import-file", "key-error", "chatter-list", "filter-description", "open-files", "files-dialog", "file-input", "upload-file", "file-selection-name", "file-pending", "file-pending-text", "retry-file", "discard-file", "files-status", "files-error", "file-list"].map((id) => [id, $(id)]));
     let session = null;
     let toastTimer;
     let scrollFrame;
@@ -572,6 +610,246 @@
         clearTimeout(timer); s.controller.signal.removeEventListener("abort", onAbort);
       }
     }
+    function validFileName(value) {
+      return typeof value === "string" && value.length > 0 && validUnicode(value) && Array.from(value).length <= 255 && encoder.encode(value).length <= 1024 && value !== "." && value !== ".." && !/[\\/\p{Cc}\p{Cf}\p{Cs}]/u.test(value);
+    }
+    function safeFileName(value) {
+      // A filename is a label, never a server path or browser navigation target.
+      if (!validFileName(value) || /[<>:"|?*]/.test(value) || /[. ]$/.test(value) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(value)) return "parcel.bin";
+      return value;
+    }
+    function validFileTime(value) {
+      return typeof value === "string" && value.length <= 64 && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value));
+    }
+    function validateFile(value) {
+      const fields = ["id", "filename", "size_bytes", "sha256", "username", "created_at", "expires_at"];
+      if (!plainObject(value) || Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field)) || typeof value.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.id) || !validFileName(value.filename) || !Number.isSafeInteger(value.size_bytes) || value.size_bytes < 0 || value.size_bytes > MAX_FILE_BYTES || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256) || !(value.username === null || (validUsername(value.username) && value.username.length)) || !validFileTime(value.created_at) || !validFileTime(value.expires_at)) throw new RequestError("protocol");
+      const lifetime = Date.parse(value.expires_at) - Date.parse(value.created_at);
+      if (lifetime <= 0 || lifetime > RETRY_LIFETIME) throw new RequestError("protocol");
+      return Object.fromEntries(fields.map((field) => [field, value[field]]));
+    }
+    function validateFilePage(value, previousCursor) {
+      if (!plainObject(value) || !Array.isArray(value.files) || value.files.length > 100 || typeof value.has_more !== "boolean" || !(value.next_cursor === null || (typeof value.next_cursor === "string" && value.next_cursor.length > 0 && value.next_cursor.length <= 2048)) || !(value.next_upload_at === null || validFileTime(value.next_upload_at))) throw new RequestError("protocol");
+      if ((value.files.length && (value.next_cursor === null || value.next_cursor === previousCursor)) || (previousCursor !== null && value.next_cursor === null) || (value.has_more && (!value.files.length || value.next_cursor === previousCursor))) throw new RequestError("protocol");
+      return { files: value.files.map(validateFile), cursor: value.next_cursor, hasMore: value.has_more, nextUploadAt: value.next_upload_at === null ? 0 : Date.parse(value.next_upload_at) };
+    }
+    async function readBoundedBytes(response, limit) {
+      const length = response.headers.get("Content-Length");
+      if (length !== null && (!/^\d+$/.test(length) || Number(length) > limit)) { await response.body?.cancel(); throw new RequestError("oversize"); }
+      // No arrayBuffer() fallback: a response must be bounded while it arrives.
+      if (!response.body || typeof response.body.getReader !== "function") throw new RequestError("protocol");
+      const reader = response.body.getReader(); const buffer = new Uint8Array(limit); let total = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break;
+          if (!(value instanceof Uint8Array) || total + value.byteLength > limit) { await reader.cancel(); throw new RequestError("oversize"); }
+          buffer.set(value, total); total += value.byteLength;
+        }
+        return buffer.slice(0, total);
+      } finally { buffer.fill(0); reader.releaseLock(); }
+    }
+    async function fileRequest(s, path, body, panelController = null, binary = false) {
+      const controller = new AbortController(); const signals = [s.controller.signal];
+      if (panelController) signals.push(panelController.signal);
+      const onAbort = () => controller.abort(); let timedOut = false;
+      for (const signal of signals) { signal.addEventListener("abort", onAbort, { once: true }); if (signal.aborted) controller.abort(); }
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
+      try {
+        const response = await fetch(API + path, { method: "POST", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { "Content-Type": "application/json", "X-Room-Token": s.token }, body: JSON.stringify(body), signal: controller.signal });
+        if (!response.ok) { await response.body?.cancel(); throw new RequestError("http", response.status, retryDelay(response.headers.get("Retry-After"))); }
+        const type = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+        if (type !== (binary ? "application/octet-stream" : "application/json")) { await response.body?.cancel(); throw new RequestError("protocol"); }
+        const bytes = await readBoundedBytes(response, binary ? MAX_FILE_BYTES : FILE_JSON_LIMIT);
+        if (!current(s) || panelController?.signal.aborted) { bytes.fill(0); throw new RequestError("cancelled"); }
+        if (binary) return { data: bytes, status: response.status };
+        try { return { data: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), status: response.status }; }
+        catch { throw new RequestError("protocol"); }
+        finally { bytes.fill(0); }
+      } catch (error) {
+        if (error instanceof RequestError) throw error;
+        if (!current(s) || panelController?.signal.aborted) throw new RequestError("cancelled");
+        throw new RequestError(timedOut ? "timeout" : "network");
+      } finally { clearTimeout(timer); for (const signal of signals) signal.removeEventListener("abort", onAbort); }
+    }
+    async function fileHash(bytes) {
+      if (!globalThis.crypto?.subtle) throw new RequestError("crypto");
+      return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+    function fileBase64(bytes) {
+      const chunks = [];
+      for (let offset = 0; offset < bytes.length; offset += 16384) chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 16384)));
+      return btoa(chunks.join(""));
+    }
+    function filePanelCurrent(s, controller) { return current(s) && ui["files-dialog"].open && s.filesController === controller && !controller.signal.aborted; }
+    function fileErrorText(error, download = false) {
+      if (error.status === 404 || error.status === 405) return download ? "This file has expired or is unavailable. Refreshing the cabinet will remove expired files." : "Files are unavailable on this server. Chat notes still work.";
+      if (error.kind === "integrity") return "The downloaded bytes did not match this file's size and SHA-256. Nothing was saved.";
+      if (error.kind === "oversize") return "The server reply exceeded the safe size limit. Nothing was saved.";
+      if (error.kind === "crypto") return "This browser cannot check file integrity safely. Use a current browser; chat notes still work.";
+      if (error.status === 429) return "The room or mailroom is pacing requests. Wait for the countdown before retrying.";
+      if (error.status === 503) return "The mailroom is busy or its file storage is full. Wait before retrying.";
+      if ([400, 413, 422].includes(error.status)) return "The mailroom rejected this file. Check its size and name, then try again.";
+      if (error.status === 409) return "The mailroom rejected this retry ID. Keep this attempt intact until its two-hour retry window closes.";
+      if (error.kind === "protocol") return "The file reply was unexpected. Nothing was saved; retry safely.";
+      return download ? "The download could not be completed. Nothing was saved." : "Delivery isn't confirmed. Retry the same file to avoid a duplicate while its receipt is live.";
+    }
+    function updateFileControls(s) {
+      if (!current(s)) return;
+      const pending = s.filePending; const selected = ui["file-input"].files[0];
+      const cooldown = Math.max(0, Math.ceil((s.nextFileUploadAt - Date.now()) / 1000));
+      const locked = s.fileBusy || Boolean(pending);
+      ui["file-input"].disabled = locked;
+      ui["upload-file"].disabled = locked || !selected || selected.size > MAX_FILE_BYTES || cooldown > 0;
+      ui["upload-file"].textContent = pending?.sending || s.fileBusy ? "Uploading…" : cooldown > 0 ? "Room waits " + cooldown + "s" : "Upload file";
+      if (pending) ui["file-selection-name"].textContent = pending.payload.filename + " · " + pending.size.toLocaleString("en-US") + " bytes · uploader " + (pending.payload.username || "Anonymous") + " (unsigned)";
+      else if (selected) {
+        const proposed = safeFileName(selected.name);
+        ui["file-selection-name"].textContent = selected.size > MAX_FILE_BYTES ? "Too large: choose a file of at most 1,000,000 bytes." : (proposed !== selected.name ? "Will upload as “" + proposed + "” (name adjusted for a safe download). " : proposed + " · ") + selected.size.toLocaleString("en-US") + " bytes";
+      } else ui["file-selection-name"].textContent = "Choose one file. Nothing uploads automatically.";
+      ui["file-pending"].hidden = !pending || pending.sending;
+      if (pending && !pending.sending) {
+        const expired = Date.now() - pending.startedAt >= RETRY_LIFETIME;
+        const wait = Math.max(0, Math.ceil((Math.max(pending.retryAt, s.nextFileUploadAt) - Date.now()) / 1000));
+        ui["file-pending-text"].textContent = expired ? "This attempt is over two hours old. Its retry protection may have expired, so it won't be resent. Clear it and explicitly choose a file to create a new upload; that may create a second copy." : "Delivery isn't confirmed. This exact file, filename, uploader and retry ID stay in this window. Retry the same file to avoid a duplicate while its original receipt is live.";
+        ui["retry-file"].disabled = expired || wait > 0;
+        ui["retry-file"].textContent = expired ? "Retry window closed" : wait > 0 ? "Retry in " + wait + "s" : "Retry the same file";
+        ui["discard-file"].hidden = !expired;
+      }
+    }
+    function renderFileList(s) {
+      if (!current(s) || !ui["files-dialog"].open) return;
+      const list = ui["file-list"];
+      const focused = list.contains(document.activeElement) ? document.activeElement.closest(".file-item")?.dataset.fileId : null;
+      list.replaceChildren();
+      const files = Array.from(s.files.values()).filter((file) => Date.parse(file.expires_at) > Date.now());
+      if (!files.length) { const empty = document.createElement("p"); empty.className = "files-empty"; empty.textContent = s.filesLoaded ? "No live files. The cabinet is pleasantly empty." : "Checking for little parcels…"; list.append(empty); }
+      for (const file of files) {
+        const item = document.createElement("article"); item.className = "file-item"; item.dataset.fileId = file.id;
+        const label = document.createElement("div"); label.className = "file-label";
+        const name = document.createElement("p"); name.className = "file-name"; name.textContent = file.filename;
+        const info = document.createElement("p"); info.className = "file-info"; info.textContent = file.size_bytes.toLocaleString("en-US") + " bytes · " + (file.username || "Anonymous") + " (unsigned)\n";
+        const expiry = document.createElement("span"); expiry.className = "file-expiry"; expiry.textContent = expiryLabel(file); info.append(expiry);
+        const button = document.createElement("button"); button.type = "button"; button.className = "secondary small file-download"; button.textContent = s.fileDownloading.has(file.id) ? "Checking…" : "Download"; button.disabled = s.fileDownloading.has(file.id); button.setAttribute("aria-label", "Download " + file.filename);
+        button.addEventListener("click", () => { void downloadFile(s, file); }); label.append(name, info); item.append(label, button); list.append(item);
+      }
+      if (focused) Array.from(list.children).find((item) => item.dataset.fileId === focused)?.querySelector("button")?.focus({ preventScroll: true });
+    }
+    function expireFiles(s) {
+      if (!current(s)) return;
+      let removed = false;
+      for (const [id, file] of s.files) if (Date.parse(file.expires_at) <= Date.now()) { s.files.delete(id); removed = true; }
+      if (removed) renderFileList(s);
+      else if (ui["files-dialog"].open) for (const item of ui["file-list"].children) {
+        const file = s.files.get(item.dataset.fileId); if (file) item.querySelector(".file-expiry").textContent = expiryLabel(file);
+      }
+      updateFileControls(s);
+    }
+    async function filesLoop(s, controller) {
+      let failures = 0;
+      while (filePanelCurrent(s, controller)) {
+        try {
+          const loaded = new Map(); const uploadVersion = s.fileUploadVersion; let cursor = null; let pageCount = 0; let nextUploadAt = 0;
+          do {
+            const { data, status } = await fileRequest(s, "/v1/files/read", { after: cursor, limit: 100 }, controller);
+            if (status !== 200) throw new RequestError("protocol");
+            const page = validateFilePage(data, cursor); if (!filePanelCurrent(s, controller)) return;
+            nextUploadAt = page.nextUploadAt;
+            for (const file of page.files) {
+              if (loaded.has(file.id)) throw new RequestError("protocol");
+              if (Date.parse(file.expires_at) > Date.now()) loaded.set(file.id, file);
+              while (loaded.size > HISTORY_LIMIT) loaded.delete(loaded.keys().next().value);
+            }
+            cursor = page.cursor; if (!page.hasMore) break;
+            // Bound malformed-server pagination even if every page claims more.
+            if (++pageCount > 30) throw new RequestError("protocol");
+          } while (filePanelCurrent(s, controller));
+          if (!filePanelCurrent(s, controller)) return;
+          // A list request can have started before our upload was committed.
+          // Preserve acknowledged live files until the next complete refresh.
+          if (s.fileUploadVersion !== uploadVersion) for (const [id, file] of s.files) if (!loaded.has(id) && Date.parse(file.expires_at) > Date.now()) loaded.set(id, file);
+          while (loaded.size > HISTORY_LIMIT) loaded.delete(loaded.keys().next().value);
+          s.files = loaded; s.filesLoaded = true; s.nextFileUploadAt = Math.max(nextUploadAt, s.nextFileUploadAt); failures = 0;
+          ui["files-status"].textContent = loaded.size + (loaded.size === 1 ? " live file" : " live files") + " · checked every 15 seconds while open · latest " + HISTORY_LIMIT + " maximum";
+          renderFileList(s); updateFileControls(s);
+          await sleep(FILE_POLL_INTERVAL, controller.signal);
+        } catch (error) {
+          if (!filePanelCurrent(s, controller)) return;
+          failures++; ui["files-status"].textContent = fileErrorText(error);
+          if (error.status === 404 || error.status === 405) return;
+          try { await sleep(Math.max(error.retryAfter || 0, Math.min(30000, 1000 * 2 ** Math.min(failures - 1, 5))), controller.signal); } catch { return; }
+        }
+      }
+    }
+    function openFiles(s) {
+      if (!current(s) || ui["files-dialog"].open) return;
+      s.filesController?.abort(); const controller = new AbortController(); s.filesController = controller;
+      ui["files-dialog"].showModal(); ui["files-status"].textContent = "Checking the cabinet…"; ui["files-error"].textContent = "";
+      expireFiles(s); renderFileList(s); void filesLoop(s, controller);
+    }
+    function stopFiles() { const s = session; if (!s) return; s.filesController?.abort(); s.filesController = null; }
+    async function prepareFile(s) {
+      if (!current(s) || s.fileBusy || s.filePending || Date.now() < s.nextFileUploadAt) return;
+      const file = ui["file-input"].files[0]; const username = ui["active-username"].value;
+      if (!file || file.size > MAX_FILE_BYTES) { ui["files-error"].textContent = "Choose one file of at most 1,000,000 bytes."; return; }
+      if (!validUsername(username)) { ui["files-error"].textContent = "Your uploader name can contain at most 64 Unicode characters."; return; }
+      const operation = ++s.fileVersion; s.fileBusy = true; ui["files-error"].textContent = ""; updateFileControls(s);
+      let bytes;
+      try {
+        bytes = new Uint8Array(await file.arrayBuffer());
+        if (!current(s) || s.fileVersion !== operation) return;
+        if (bytes.length !== file.size || bytes.length > MAX_FILE_BYTES) throw new RequestError("oversize");
+        const hash = await fileHash(bytes); if (!current(s) || s.fileVersion !== operation) return;
+        const payload = { filename: safeFileName(file.name), data_base64: fileBase64(bytes), client_file_id: randomHex(16) }; if (username.length) payload.username = username;
+        s.filePending = { payload, size: bytes.length, hash, startedAt: Date.now(), retryAt: 0, sending: false }; s.fileBusy = false; updateFileControls(s); void sendFilePending(s);
+      } catch (error) { if (current(s) && s.fileVersion === operation) ui["files-error"].textContent = ["crypto", "oversize"].includes(error.kind) ? fileErrorText(error) : "This file couldn't be prepared safely. Nothing was uploaded. Choose it again or use a current browser."; }
+      finally { bytes?.fill(0); if (current(s) && s.fileVersion === operation) { s.fileBusy = false; updateFileControls(s); } }
+    }
+    async function sendFilePending(s) {
+      if (!current(s) || !s.filePending || s.filePending.sending || Date.now() < Math.max(s.filePending.retryAt, s.nextFileUploadAt) || Date.now() - s.filePending.startedAt >= RETRY_LIFETIME) return;
+      const pending = s.filePending; pending.sending = true; ui["files-error"].textContent = ""; updateFileControls(s);
+      try {
+        const { data, status } = await fileRequest(s, "/v1/files", pending.payload);
+        if (status !== 201) throw new RequestError("protocol");
+        const file = validateFile(data);
+        if (file.filename !== pending.payload.filename || file.username !== (pending.payload.username ?? null) || file.size_bytes !== pending.size || file.sha256 !== pending.hash) throw new RequestError("protocol");
+        if (!current(s) || s.filePending !== pending) return;
+        s.files.set(file.id, file); s.fileUploadVersion++; while (s.files.size > HISTORY_LIMIT) s.files.delete(s.files.keys().next().value);
+        s.nextFileUploadAt = Math.max(s.nextFileUploadAt, Date.parse(file.created_at) + 30000);
+        pending.payload.data_base64 = ""; s.filePending = null; ui["file-input"].value = ""; ui["files-error"].textContent = "";
+        renderFileList(s); updateFileControls(s); toast("File delivered. Here for two hours; downloads are unsigned."); announce("File delivered.");
+      } catch (error) {
+        if (!current(s) || s.filePending !== pending) return;
+        pending.sending = false; pending.retryAt = Date.now() + Math.max(error.retryAfter || 0, 1000);
+        if ([400, 404, 405, 413, 422].includes(error.status)) { pending.payload.data_base64 = ""; s.filePending = null; }
+        ui["files-error"].textContent = fileErrorText(error); updateFileControls(s);
+      }
+    }
+    async function downloadFile(s, file) {
+      const controller = s.filesController;
+      if (!controller || !filePanelCurrent(s, controller) || s.fileDownloading.has(file.id) || Date.parse(file.expires_at) <= Date.now()) return;
+      s.fileDownloading.add(file.id); ui["files-error"].textContent = ""; renderFileList(s);
+      let bytes;
+      try {
+        const result = await fileRequest(s, "/v1/files/download", { file_id: file.id }, controller, true); bytes = result.data;
+        if (result.status !== 200 || bytes.length !== file.size_bytes || await fileHash(bytes) !== file.sha256) throw new RequestError("integrity");
+        if (!filePanelCurrent(s, controller) || Date.parse(file.expires_at) <= Date.now()) return;
+        // Deliberate downloads only. No preview, parsing, MIME sniffing or opening.
+        const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" })); s.fileUrls.add(url);
+        const link = document.createElement("a"); link.href = url; link.download = safeFileName(file.filename); document.body.append(link); link.click(); link.remove();
+        const timer = setTimeout(() => { URL.revokeObjectURL(url); s.fileUrls.delete(url); s.fileUrlTimers.delete(timer); }, 1000); s.fileUrlTimers.add(timer);
+        toast("File downloaded. Opening untrusted files can be unsafe.");
+      } catch (error) { if (filePanelCurrent(s, controller)) ui["files-error"].textContent = fileErrorText(error, true); }
+      finally { bytes?.fill(0); s.fileDownloading.delete(file.id); if (filePanelCurrent(s, controller)) renderFileList(s); }
+    }
+    function clearFiles(s) {
+      s.fileVersion++; s.fileBusy = false; s.filesController?.abort(); s.filesController = null;
+      if (s.filePending) s.filePending.payload.data_base64 = "";
+      s.filePending = null; s.files.clear(); s.fileDownloading.clear(); s.nextFileUploadAt = 0;
+      for (const timer of s.fileUrlTimers) clearTimeout(timer); s.fileUrlTimers.clear();
+      for (const url of s.fileUrls) URL.revokeObjectURL(url); s.fileUrls.clear();
+      if (ui["files-dialog"].open) ui["files-dialog"].close();
+      ui["file-input"].value = ""; ui["file-input"].disabled = false; ui["file-list"].replaceChildren(); ui["files-error"].textContent = ""; ui["files-status"].textContent = ""; ui["file-pending-text"].textContent = ""; ui["file-pending"].hidden = true; ui["file-selection-name"].textContent = "Choose one file. Nothing uploads automatically."; ui["upload-file"].disabled = true; ui["upload-file"].textContent = "Upload file";
+    }
     function validateReceipt(value) {
       if (!plainObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.id) || typeof value.message !== "string" || !value.message.length || !validUnicode(value.message) || encoder.encode(value.message).length > MAX_BYTES || !(value.username === null || (validUsername(value.username) && value.username.length))) throw new RequestError("protocol");
       for (const field of ["created_at", "expires_at"]) {
@@ -723,6 +1001,7 @@
         refreshEmpty(s);
       }
       updatePending(s);
+      expireFiles(s);
     }
     function readErrorText(error) {
       if (error.status === 429) return "The mailroom is pacing requests. Waiting before checking again.";
@@ -834,7 +1113,7 @@
     }
     function startSession(token, username) {
       if (session) leaveRoom();
-      const s = { token, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null };
+      const s = { token, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set() };
       session = s;
       ui["signing-toggle"].checked = false; clearImportFields(); ui["key-error"].textContent = "";
       s.supportPromise = supportsEd25519(s).then((supported) => { if (current(s)) { s.cryptoSupport = supported; refreshKeyUI(s); } return supported; });
@@ -843,7 +1122,7 @@
       ui["active-username"].value = username; ui["message-input"].value = ""; ui["composer-error"].textContent = ""; ui.messages.replaceChildren(); ui["read-notice"].hidden = true; ui["new-messages"].hidden = true;
       ui["join-view"].hidden = true; ui["chat-view"].hidden = false; ui["site-footer"].hidden = true;
       document.body.classList.add("in-room");
-      setConnection(s, "connecting", "Connecting"); emptyState(s); refreshEmpty(s); updatePending(s);
+      setConnection(s, "connecting", "Connecting"); emptyState(s); refreshEmpty(s); updatePending(s); updateFileControls(s);
       s.expiryTimer = setInterval(() => expireMessages(s), 1000);
       ui["message-input"].focus(); void readLoop(s);
     }
@@ -851,6 +1130,7 @@
       const s = session;
       if (!s) return;
       session = null; s.controller.abort(); clearInterval(s.expiryTimer); cancelAnimationFrame(scrollFrame); clearTimeout(toastTimer);
+      clearFiles(s);
       s.token = ""; s.pending = null; s.cursor = null; s.messages.clear(); s.elements.clear(); s.ownIds.clear(); s.order.length = 0;
       s.keyVersion++; s.key = null; s.keyBusy = false; s.verificationKeys.clear(); s.selectedChatter = "all"; s.selectedChatterInfo = null;
       if (ui["key-dialog"].open) ui["key-dialog"].close(); clearImportFields();
@@ -893,6 +1173,18 @@
     $("reveal-token").addEventListener("click", () => { const show = ui["active-token"].type === "password"; ui["active-token"].type = show ? "text" : "password"; $("reveal-token").textContent = show ? "Hide" : "Show"; $("reveal-token").setAttribute("aria-pressed", String(show)); });
     $("copy-token").addEventListener("click", () => { void copyToken(); });
     $("leave-room").addEventListener("click", leaveRoom);
+    ui["open-files"].addEventListener("click", () => { if (session) openFiles(session); });
+    $("close-files").addEventListener("click", () => { stopFiles(); ui["files-dialog"].close(); });
+    ui["files-dialog"].addEventListener("close", () => { if (!ui["files-dialog"].open) stopFiles(); });
+    ui["files-dialog"].addEventListener("cancel", stopFiles);
+    ui["file-input"].addEventListener("change", () => { if (session) { ui["files-error"].textContent = ""; updateFileControls(session); } });
+    ui["upload-file"].addEventListener("click", () => { if (session) void prepareFile(session); });
+    ui["retry-file"].addEventListener("click", () => { if (session) void sendFilePending(session); });
+    ui["discard-file"].addEventListener("click", () => {
+      const s = session; if (!s?.filePending || s.filePending.sending || Date.now() - s.filePending.startedAt < RETRY_LIFETIME) return;
+      s.filePending.payload.data_base64 = ""; s.filePending = null; ui["file-input"].value = ""; updateFileControls(s);
+      ui["files-error"].textContent = "Old retry cleared. Choose a file to make a new upload; it may create a second copy.";
+    });
     ui["manage-key"].addEventListener("click", () => { if (session && !session.pending) { refreshKeyUI(session); ui["key-error"].textContent = ""; ui["key-dialog"].showModal(); } });
     $("close-key").addEventListener("click", closeKeyDialog);
     ui["key-dialog"].addEventListener("close", clearImportFields);
