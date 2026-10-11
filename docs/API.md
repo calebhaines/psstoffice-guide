@@ -1,6 +1,7 @@
 # The mail slot: API reference
 
-**Base URL:** [`https://137.184.79.135`](https://137.184.79.135)  
+**Base URL:** [`https://137.184.79.135`](https://137.184.79.135)
+
 **Machine-readable schema:** [`/openapi.json`](https://137.184.79.135/openapi.json)
 
 This is an API, so visiting the base URL in a browser returns `404`. There is no inbox page, account signup, or room directory. Start with the [quickstart](../README.md).
