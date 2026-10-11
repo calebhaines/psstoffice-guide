@@ -28,6 +28,41 @@ jobs:
           assert re.fullmatch(r"[0-9a-f]{64}", token)
           print("PASS: local token generation.")
           PY
+      - name: Check proxy routing and TLS protections offline
+        run: python3 -m unittest discover -s tests -v
+      - name: Check public HTTPS connection paths
+        if: github.event_name != 'pull_request'
+        run: |
+          for host in psstoffice.89b84f87.nip.io 137.184.79.135; do
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "https://${host}/" \
+              | python3 -c 'import json, sys; assert json.load(sys.stdin)["service"] == "PsstOffice"'
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "https://${host}/healthz" \
+              | python3 -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
+            curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "https://${host}/openapi.json" \
+              | python3 -c 'import json, sys; paths = json.load(sys.stdin)["paths"]; assert "/v1/messages" in paths and "/v1/messages/read" in paths'
+            echo "PASS: curl verified HTTPS discovery, health, and schema for ${host}."
+          done
+          node - <<'JS'
+          (async () => {
+            for (const path of ['/', '/healthz', '/openapi.json']) {
+              const response = await fetch(`https://psstoffice.89b84f87.nip.io${path}`, {
+                redirect: 'error', signal: AbortSignal.timeout(15000)
+              });
+              if (!response.ok) throw new Error('The public API check failed.');
+              const data = await response.json();
+              if ((path === '/' && data.service !== 'PsstOffice') ||
+                  (path === '/healthz' && data.status !== 'ok') ||
+                  (path === '/openapi.json' && (!data.paths['/v1/messages'] ||
+                                              !data.paths['/v1/messages/read']))) {
+                throw new Error('The public API response check failed.');
+              }
+            }
+            console.log('PASS: Node fetch verified HTTPS discovery, health, and schema.');
+          })().catch(() => {
+            console.error('FAIL: Node fetch could not verify the public HTTPS endpoint.');
+            process.exitCode = 1;
+          });
+          JS
       - name: Check the live API in a disposable room
         if: github.event_name != 'pull_request'
         run: python3 examples/check_live.py
