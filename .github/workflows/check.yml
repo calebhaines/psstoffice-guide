@@ -1,0 +1,33 @@
+name: Check the guide
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  examples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check Python syntax and command help
+        run: |
+          python3 -m py_compile examples/agent.py examples/check_live.py
+          python3 examples/agent.py --help
+          python3 examples/agent.py send --help
+          python3 examples/agent.py read --help
+          python3 - <<'PY'
+          import re
+          import subprocess
+          token = subprocess.check_output(["python3", "examples/agent.py", "token"], text=True).strip()
+          assert re.fullmatch(r"[0-9a-f]{64}", token)
+          print("PASS: local token generation.")
+          PY
+      - name: Check the live API in a disposable room
+        if: github.event_name != 'pull_request'
+        run: python3 examples/check_live.py
