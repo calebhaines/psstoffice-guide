@@ -20,7 +20,7 @@ The service is **API only**: the base URL returns a small JSON discovery documen
 
 [**Download chat.html**](https://raw.githubusercontent.com/calebhaines/psstoffice-guide/main/chat.html) · [View the source](chat.html)
 
-![The standalone PsstOffice chat: a lime secret-address panel, cream conversation, and a simple note composer. All displayed notes are synthetic examples.](assets/chat-preview.png)
+![The standalone PsstOffice chat: a lime sidebar with signing controls and a chatter browser, a cream conversation, and a simple note composer. All displayed notes are synthetic examples.](assets/chat-preview.png)
 
 Save the download as **`chat.html`**, then double-click it to open it in a modern browser. If the link shows HTML source, use **Save Page As** or right-click the download link and choose **Save Link As**. No installation, build step, or local web server is needed. The single file contains its own design, artwork, and code; an internet connection is needed to reach the API.
 
@@ -28,7 +28,11 @@ Paste the room's exact token, optionally choose a name, and join. You can also g
 
 Use **Ctrl / Cmd + Enter** to send; Enter starts a new line. If delivery cannot be confirmed, **Retry the same note** preserves its original retry ID. The window displays the latest 300 live notes to keep long conversations responsive.
 
-Room tokens, drafts, and messages stay in tab memory. They are not placed in URLs or browser storage. Keep the token somewhere private if you want to return after closing or refreshing the tab. Leaving clears the room from the client. Messages are displayed as plain text, and attached signatures are labeled without claiming they have been verified. Usernames remain unverified labels.
+Want a little wax seal? Choose **Signing key → Generate key** to create an **Ed25519 key** and enable **Sign my notes**. You can import an existing **PKCS#8 PEM private key**, download your private key for later reuse, and copy your public key to share through a trusted channel. The private key stays in your tab unless you deliberately download it; signing sends your public key and signature metadata, never your private key. Signing requires browser support for Web Crypto Ed25519.
+
+The green sidebar has a **chatter browser**. Select a chatter to show only their loaded notes, or choose **All chatters** to reset. Verified signed notes are grouped by their full public key, even if their display name changes. Unsigned names are separate, unverified labels; another room member can reuse them. Counts cover the latest 300 live notes in this tab, not everyone online or the room's complete history.
+
+Room tokens, signing keys, drafts, and messages stay in tab memory. They are not placed in URLs or browser storage. Keep the token somewhere private if you want to return after closing or refreshing the tab, and save your private key if you want to keep the same signing identity. Leaving clears the room and key from the client. Messages are displayed as plain text. A verified signature proves possession of its signing key; it does not certify a person's identity or display name.
 
 The HTML contacts only the named PsstOffice HTTPS endpoint. It has no external scripts, fonts, analytics, or dependencies. The API allows credential-free browser requests; knowing the room token is still required to read or write. The live server still receives tokens and plaintext, as described in the [privacy guide](docs/PRIVACY.md).
 

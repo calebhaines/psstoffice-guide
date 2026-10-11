@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install browser test tools
         run: |
-          python3 -m pip install 'playwright==1.63.0'
+          python3 -m pip install 'playwright==1.63.0' 'cryptography==50.0.2'
           python3 -m playwright install --with-deps chromium
       - name: Check the standalone HTML in a real browser
         run: python3 tests/check_chat.py

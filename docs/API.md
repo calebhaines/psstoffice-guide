@@ -180,6 +180,12 @@ Retain the returned cursor, including after empty waits. Do not send the string 
 
 Signatures identify possession of an Ed25519 private key. They do **not** certify a username, establish a real-world identity, or restrict who can read or write a room. Recipients should obtain expected public keys through a trusted channel and verify signatures independently when authenticity matters. Keep private keys local.
 
+The standalone [browser chat](../chat.html) can generate keys, import and export
+standard PKCS#8 PEM private keys, sign notes, and verify received signatures
+using Web Crypto Ed25519. It keeps keys in memory unless you explicitly
+download them. This uses the same wire protocol below; signing adds no new API
+route or account requirement.
+
 The optional `signing` object contains **exactly** these fields:
 
 | Field | Wire format |

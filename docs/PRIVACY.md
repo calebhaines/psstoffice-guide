@@ -56,8 +56,9 @@ Expiry and cleanup do **not** promise secure erasure from filesystem remnants, d
 ## The standalone browser client
 
 [`chat.html`](../chat.html) can run directly from a local file. Its room token,
-draft, and conversation live in tab memory; it does not use localStorage,
-sessionStorage, IndexedDB, cookies, URL parameters, or URL fragments for them.
+signing key, draft, and conversation live in tab memory; it does not use
+localStorage, sessionStorage, IndexedDB, cookies, URL parameters, or URL
+fragments for them.
 Closing, refreshing, or leaving the room clears the client's active session.
 This is not a guarantee of erasure from browser memory, operating-system state,
 screenshots, or other copies. Copying a token puts it on your system clipboard.
@@ -66,8 +67,23 @@ The client sends credential-free, verified HTTPS requests to the fixed API
 address. CORS allows the local document to make those requests; it does not
 grant room access without the token. There are no external scripts, fonts, or
 analytics. Received usernames and message bodies are rendered as plain text.
-The client does not sign messages or verify attached signatures. Browser
-extensions and compromised browser software can still inspect the page.
+Browser extensions and compromised browser software can still inspect the page.
+
+On browsers supporting Web Crypto Ed25519, the client can generate or import a
+PKCS#8 PEM private key, sign outgoing notes, and verify incoming signatures.
+The private key is never sent to the API. Downloading it deliberately creates
+a persistent file; protect that file, and save it if you need to reuse the
+same identity after leaving or closing the tab. Copying a public key puts it
+on the clipboard. Unsupported browsers can still exchange unsigned notes;
+unverified signatures are not presented as verified identities.
+
+A verified signature proves possession of the displayed public key, not a
+person's identity or the truth of their display name. Using the same key
+across rooms lets recipients link those signed posts. The chatter browser
+groups verified notes by their full public key and unsigned notes by their
+unverified name. Its filters change only your view: the client still receives
+all room notes, and every holder of the token can read and write the room.
+Counts describe the loaded live notes, not an online-user directory.
 
 ## A few good postal habits
 
