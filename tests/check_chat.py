@@ -379,6 +379,54 @@ class BrowserCase:
         await wait_until(lambda: bool(self.fixture.reads()))
 
 
+class RoomFixture:
+    """Separate API queues and held requests for every synthetic room token."""
+
+    def __init__(self, rooms):
+        self.rooms = rooms
+
+    async def handle(self, route):
+        headers = await route.request.all_headers()
+        if route.request.method == "OPTIONS":
+            fixture = next(iter(self.rooms.values()))
+        else:
+            token = headers.get("x-room-token")
+            assert token in self.rooms, "An unknown room token was sent"
+            fixture = self.rooms[token]
+        await fixture.handle(route)
+
+    @property
+    def requests(self):
+        return sorted((request for room in self.rooms.values() for request in room.requests),
+                      key=lambda request: request["time"])
+
+    def reads(self):
+        return [request for request in self.requests if request["url"].endswith("/messages/read")]
+
+    def file_reads(self):
+        return [request for request in self.requests if request["url"].endswith("/files/read")]
+
+    def close(self):
+        for room in self.rooms.values():
+            room.close()
+
+
+def room_tab(page, number):
+    return page.locator('#room-tabs .room-tab[role="tab"]').filter(has_text=f"Room {number}")
+
+
+async def add_room(case, token=TOKEN_B, username="second-agent"):
+    await case.page.locator("#add-room").click()
+    await expect(case.page.locator("#join-view")).to_be_visible()
+    await case.join(token, username)
+
+
+async def switch_room(page, number):
+    await room_tab(page, number).click()
+    await expect(room_tab(page, number)).to_have_attribute("aria-selected", "true")
+    await expect(page.locator("#chat-view")).to_be_visible()
+
+
 async def test_token_and_privacy(browser):
     async with BrowserCase(browser) as case:
         p = case.page
@@ -2039,6 +2087,509 @@ async def test_leaving_during_enriched_signing_does_not_revive_reply(browser):
         assert parent["message"] not in await p.locator("#messages").inner_text()
 
 
+async def test_room_tabs_add_duplicate_cancel_close_and_privacy(browser):
+    note_a, note_b = receipt("Room A secret"), receipt("Room B secret")
+    fixture = RoomFixture({TOKEN_A: MailFixture([page_of(note_a)]),
+                           TOKEN_B: MailFixture([page_of(note_b)])})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await expect(room_tab(p, 1)).to_have_attribute("aria-selected", "true")
+        await p.locator("#message-input").fill("An unfinished Room A note")
+        await p.locator("#add-room").click()
+        await p.locator("#room-token").fill(TOKEN_B)
+        await p.locator("#cancel-add-room").click()
+        await expect(p.locator("#message-input")).to_have_value("An unfinished Room A note")
+        await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(1)
+        await p.locator("#add-room").click()
+        await p.keyboard.press("Escape")
+        await expect(p.locator("#chat-view")).to_be_visible()
+        await add_room(case)
+        await expect(p.locator("#messages")).to_contain_text(note_b["message"])
+        assert note_a["message"] not in await p.locator("#messages").inner_text()
+        await add_room(case, TOKEN_A, username="Do not overwrite existing identity")
+        await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(2)
+        await expect(room_tab(p, 1)).to_have_attribute("aria-selected", "true")
+        await expect(p.locator("#active-username")).to_have_value("human-test")
+        await expect(p.locator("#message-input")).to_have_value("An unfinished Room A note")
+        assert TOKEN_A not in await p.locator("#room-tabs").inner_text()
+        assert TOKEN_B not in await p.locator("#room-tabs").inner_text()
+        assert TOKEN_A not in p.url and TOKEN_B not in p.url
+        assert await p.evaluate("({local:localStorage.length,session:sessionStorage.length})") == {"local": 0, "session": 0}
+        await p.get_by_role("button", name="Close Room 2", exact=True).click()
+        await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(1)
+        await expect(p.locator("#message-input")).to_have_value("An unfinished Room A note")
+        await p.get_by_role("button", name="Close Room 1", exact=True).click()
+        await expect(p.locator("#join-view")).to_be_visible()
+        await expect(p.locator("#room-token")).to_have_value("")
+        assert await p.locator("article.message").count() == 0
+        count = len(fixture.reads())
+        await asyncio.sleep(0.2)
+        assert len(fixture.reads()) == count, "Closing the last tab kept polling"
+        fixture.rooms[TOKEN_A].read_pages.append(EMPTY_PAGE.copy())
+        await case.join()
+        await expect(p.locator("#message-input")).to_have_value("")
+        assert note_a["message"] not in await p.locator("#messages").inner_text(), "Closed room history survived reopening"
+
+
+async def test_room_tabs_independent_composer_identity_reply_and_chatter(browser):
+    parent = receipt("A question only in A", "alpha", message_type="question")
+    neighbor = receipt("A second chatter", "other-alpha")
+    note_b = receipt("B is its own conversation", "bravo")
+    fixture = RoomFixture({TOKEN_A: MailFixture([page_of(parent, neighbor)]),
+                           TOKEN_B: MailFixture([page_of(note_b)])})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join(username="alpha-self")
+        await expect(p.locator("article.message")).to_have_count(2)
+        group = await message_row(p, parent).get_attribute("data-chatter-id")
+        await p.locator(f'.chatter-button[data-chatter-id={json.dumps(group)}]').click()
+        await choose_reply(p, parent)
+        await p.locator("#message-type").select_option("result")
+        await p.locator("#message-input").fill("A draft with its own reply and type")
+        public_a = await make_key(p)
+        await p.locator("#close-key").click()
+        await add_room(case, username="bravo-self")
+        await expect(p.locator("article.message")).to_have_count(1)
+        await expect(p.locator("#message-input")).to_have_value("")
+        await expect(p.locator("#message-type")).to_have_value("")
+        await expect(p.locator("#reply-target")).not_to_be_visible()
+        await expect(p.locator('.chatter-button[data-chatter-id="all"]')).to_have_attribute("aria-pressed", "true")
+        await expect(p.locator("#signing-toggle")).not_to_be_checked()
+        await p.locator("#manage-key").click()
+        await expect(p.locator("#public-key")).to_have_value("")
+        await p.locator("#close-key").click()
+        await p.locator("#message-input").fill("B draft stays in B")
+        await p.locator("#message-type").select_option("task")
+        await switch_room(p, 1)
+        await expect(p.locator("#active-username")).to_have_value("alpha-self")
+        await expect(p.locator("#message-input")).to_have_value("A draft with its own reply and type")
+        await expect(p.locator("#message-type")).to_have_value("result")
+        await expect(p.locator("#reply-target-text")).to_contain_text(parent["message"])
+        await expect(p.locator(f'.chatter-button[data-chatter-id={json.dumps(group)}]')).to_have_attribute("aria-pressed", "true")
+        await expect(p.locator("#signing-toggle")).to_be_checked()
+        await p.locator("#manage-key").click()
+        await expect(p.locator("#public-key")).to_have_value(public_a)
+        await p.locator("#close-key").click()
+        await p.locator("#send-button").click()
+        await wait_until(lambda: len(fixture.rooms[TOKEN_A].sends()) == 1)
+        post = fixture.rooms[TOKEN_A].sends()[0]["body"]
+        verify_post(post, TOKEN_A)
+        assert post["reply_to"] == parent["id"] and post["message_type"] == "result"
+        assert post["username"] == "alpha-self"
+        assert not fixture.rooms[TOKEN_B].sends(), "Switching sent an inactive room's draft"
+        await switch_room(p, 2)
+        await expect(p.locator("#message-input")).to_have_value("B draft stays in B")
+        await expect(p.locator("#message-type")).to_have_value("task")
+        await expect(p.locator("#active-username")).to_have_value("bravo-self")
+
+
+async def test_room_tabs_restore_scroll_and_only_active_polls(browser):
+    notes = [receipt(f"Long A history {index}: " + "letterbox " * 20) for index in range(45)]
+    fixture = RoomFixture({TOKEN_A: MailFixture([page_of(*notes, cursor="a-position")]),
+                           TOKEN_B: MailFixture([page_of(receipt("B history"), cursor="b-position")])})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await expect(p.locator("article.message")).to_have_count(len(notes))
+        await p.locator("#messages").evaluate("element => { element.scrollTop = 173; }")
+        before = await p.locator("#messages").evaluate("element => element.scrollTop")
+        assert before > 0
+        await wait_until(lambda: bool(fixture.rooms[TOKEN_A].pending_reads))
+        await add_room(case)
+        await wait_until(lambda: bool(fixture.rooms[TOKEN_B].pending_reads))
+        a_count = len(fixture.rooms[TOKEN_A].reads())
+        fixture.rooms[TOKEN_A].release(page_of(receipt("A stale poll must not become B history"), cursor="stale-a"))
+        await asyncio.sleep(0.15)
+        assert len(fixture.rooms[TOKEN_A].reads()) == a_count, "An inactive room restarted its poll"
+        assert "A stale poll" not in await p.locator("#messages").inner_text()
+        await switch_room(p, 1)
+        await expect(p.locator("article.message")).to_have_count(len(notes))
+        restored = await p.locator("#messages").evaluate("element => element.scrollTop")
+        assert abs(restored - before) <= 2, f"Room scroll position changed from {before} to {restored}"
+        await wait_until(lambda: len(fixture.rooms[TOKEN_A].reads()) > a_count)
+        assert fixture.rooms[TOKEN_A].reads()[-1]["body"].get("after") == "a-position", "Returning to a room lost its cursor"
+
+
+async def test_room_tabs_uncertain_send_keeps_exact_room_retry(browser):
+    fixture = RoomFixture({TOKEN_A: MailFixture(send_results=["abort"]), TOKEN_B: MailFixture()})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await p.locator("#message-type").select_option("question")
+        await p.locator("#message-input").fill("An uncertain A parcel")
+        await p.locator("#send-button").click()
+        await expect(p.locator("#retry-send")).to_be_visible()
+        original = fixture.rooms[TOKEN_A].sends()[0]["body"]
+        await add_room(case)
+        await expect(p.locator("#pending-notice")).not_to_be_visible()
+        await p.locator("#message-input").fill("B sends independently")
+        await p.locator("#send-button").click()
+        await expect(p.locator("#message-input")).to_have_value("")
+        await switch_room(p, 1)
+        await expect(p.locator("#retry-send")).to_be_visible()
+        await p.locator("#retry-send").click()
+        await wait_until(lambda: len(fixture.rooms[TOKEN_A].sends()) == 2)
+        retried = fixture.rooms[TOKEN_A].sends()[1]
+        assert retried["body"] == original, "Tab switch changed a retry's exact payload or ID"
+        assert retried["headers"]["x-room-token"] == TOKEN_A
+        assert len(fixture.rooms[TOKEN_B].sends()) == 1
+        await expect(p.locator("#pending-notice")).not_to_be_visible()
+
+
+async def test_room_tabs_crypto_completions_stay_stale_after_return(browser):
+    for operation in ["generateKey", "sign"]:
+        fixture = RoomFixture({TOKEN_A: MailFixture(), TOKEN_B: MailFixture()})
+        async with BrowserCase(browser, fixture, init_script=HOLD_CRYPTO) as case:
+            p = case.page
+            await case.join()
+            public = ""
+            if operation == "sign":
+                public = await make_key(p)
+                await p.locator("#close-key").click()
+                await p.locator("#message-input").fill("A signing operation interrupted by tabs")
+                await p.evaluate("window.__hold_crypto = 'sign'")
+                await p.locator("#send-button").click()
+            else:
+                await p.locator("#manage-key").click()
+                await p.evaluate("window.__hold_crypto = 'generateKey'")
+                await p.locator("#generate-key").click()
+            await p.wait_for_function("() => window.__held_crypto && typeof window.__release_crypto === 'function'")
+            if operation == "generateKey":
+                await p.locator("#close-key").click()
+            await add_room(case)
+            await switch_room(p, 1)
+            await p.evaluate("window.__hold_crypto = ''; window.__release_crypto()")
+            await asyncio.sleep(0.15)
+            assert not fixture.rooms[TOKEN_A].sends() and not fixture.rooms[TOKEN_B].sends(), "A stale crypto completion sent after A→B→A"
+            if operation == "sign":
+                await expect(p.locator("#retry-send")).to_be_visible()
+                await p.locator("#retry-send").click()
+                await wait_until(lambda: len(fixture.rooms[TOKEN_A].sends()) == 1)
+                verify_post(fixture.rooms[TOKEN_A].sends()[0]["body"], TOKEN_A)
+                await expect(p.locator("#pending-notice")).not_to_be_visible()
+            await p.locator("#manage-key").click()
+            await expect(p.locator("#public-key")).to_have_value(public)
+            await p.locator("#close-key").click()
+
+
+async def test_room_tabs_signed_retry_refresh_does_not_mutate_resumed_attempt(browser):
+    fixture = RoomFixture({TOKEN_A: MailFixture(send_results=["abort"]), TOKEN_B: MailFixture()})
+    async with BrowserCase(browser, fixture, init_script=HOLD_CRYPTO) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        public = await make_key(p)
+        await p.locator("#close-key").click()
+        await p.locator("#message-type").select_option("task")
+        await p.locator("#message-input").fill("A retry remains immutable across suspended signing")
+        await p.locator("#send-button").click()
+        await expect(p.locator("#retry-send")).to_be_visible()
+        original = fixture.rooms[TOKEN_A].sends()[0]["body"]
+        await p.clock.fast_forward(310_000)
+        await p.evaluate("window.__hold_crypto = 'sign'")
+        await p.locator("#retry-send").click()
+        await p.wait_for_function("() => window.__held_crypto && typeof window.__release_crypto === 'function'")
+        await add_room(case)
+        await switch_room(p, 1)
+        await p.evaluate("window.__hold_crypto = ''; window.__release_crypto()")
+        await asyncio.sleep(0.15)
+        assert len(fixture.rooms[TOKEN_A].sends()) == 1, "Old retry signing published after A→B→A"
+        await expect(p.locator("#retry-send")).to_be_visible()
+        await p.locator("#retry-send").click()
+        await wait_until(lambda: len(fixture.rooms[TOKEN_A].sends()) == 2)
+        resumed = fixture.rooms[TOKEN_A].sends()[1]["body"]
+        for field in ["message", "username", "client_message_id", "message_type"]:
+            assert resumed[field] == original[field], "Held retry completion mutated the resumed attempt"
+        assert resumed["signing"]["public_key"] == public
+        assert resumed["signing"]["signed_at"] >= original["signing"]["signed_at"] + 300
+        verify_post(resumed, TOKEN_A)
+
+
+async def test_room_tabs_old_read_is_stale_even_after_return(browser):
+    old = receipt("Old A read result should never render")
+    fresh = receipt("Fresh A activation read")
+    fixture = RoomFixture({TOKEN_A: MailFixture([]), TOKEN_B: MailFixture()})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await wait_until(lambda: bool(fixture.rooms[TOKEN_A].pending_reads))
+        await add_room(case)
+        fixture.rooms[TOKEN_A].read_pages.append(page_of(fresh, cursor="fresh-activation"))
+        await switch_room(p, 1)
+        await expect(p.locator("#messages")).to_contain_text(fresh["message"])
+        fixture.rooms[TOKEN_A].release(page_of(old, cursor="old-activation"))
+        await asyncio.sleep(0.15)
+        assert old["message"] not in await p.locator("#messages").inner_text(), "A→B→A revived an old read activation"
+        await expect(p.locator("article.message")).to_have_count(1)
+
+
+async def test_room_tabs_files_status_and_upload_retry_are_independent(browser):
+    data_a, data_b = b"A file bytes", b"B file bytes"
+    fixture = RoomFixture({TOKEN_A: MailFixture(upload_results=["abort"]), TOKEN_B: MailFixture()})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        await set_status(case, "A secret picnic", "green")
+        await open_files(case)
+        await choose_file(p, data_a, "alpha.bin")
+        await p.locator("#upload-file").click()
+        await expect(p.locator("#retry-file")).to_be_visible()
+        original = fixture.rooms[TOKEN_A].uploads()[0]["body"]
+        await p.locator("#close-files").click()
+        await add_room(case)
+        await expect(p.locator("#room-status-text")).to_have_text("Set room status")
+        await set_status(case, "B secret picnic", "blue")
+        await open_files(case)
+        await expect(p.locator("#file-pending")).not_to_be_visible()
+        assert "alpha.bin" not in await p.locator("#files-dialog").inner_text()
+        await choose_file(p, data_b, "bravo.bin")
+        await p.locator("#upload-file").click()
+        await expect(p.locator("article.file-item")).to_have_count(1)
+        await choose_file(p, b"second B bytes", "bravo-second.bin")
+        await expect(p.locator("#upload-file")).to_be_disabled()
+        await p.locator("#close-files").click()
+        await switch_room(p, 1)
+        await expect(p.locator("#room-status-text")).to_have_text("A secret picnic")
+        await expect(p.locator("#room-status")).to_have_attribute("data-color", "green")
+        await open_files(case)
+        await expect(p.locator("#retry-file")).to_be_visible()
+        await p.locator("#retry-file").click()
+        await wait_until(lambda: len(fixture.rooms[TOKEN_A].uploads()) == 2)
+        assert fixture.rooms[TOKEN_A].uploads()[1]["body"] == original, "Tab switch changed file retry bytes or ID"
+        await expect(p.locator("article.file-item")).to_have_count(1)
+        assert "alpha.bin" in await p.locator("#file-list").inner_text()
+        assert "bravo.bin" not in await p.locator("#file-list").inner_text()
+        await p.locator("#close-files").click()
+        await switch_room(p, 2)
+        await expect(p.locator("#room-status-text")).to_have_text("B secret picnic")
+        await expect(p.locator("#room-status")).to_have_attribute("data-color", "blue")
+        await open_files(case)
+        await expect(p.locator("#file-selection-name")).to_contain_text("bravo-second.bin")
+        await expect(p.locator("#upload-file")).to_be_disabled()
+        assert len(fixture.rooms[TOKEN_B].uploads()) == 1, "Room A retry bypassed or reset room B cooldown"
+
+
+async def test_room_tabs_file_preparation_stays_stale_after_return(browser):
+    for operation in ["arrayBuffer", "digest"]:
+        fixture = RoomFixture({TOKEN_A: MailFixture(), TOKEN_B: MailFixture()})
+        async with BrowserCase(browser, fixture, init_script=HOLD_FILE_CRYPTO) as case:
+            p = case.page
+            await case.join()
+            await open_files(case)
+            await choose_file(p, b"File prepared in an old activation", "old-activation.bin")
+            await p.evaluate("operation => window.__hold_file = operation", operation)
+            await p.locator("#upload-file").click()
+            await p.wait_for_function("() => window.__held_file && typeof window.__release_file === 'function'")
+            await p.locator("#close-files").click()
+            await add_room(case)
+            await switch_room(p, 1)
+            await p.evaluate("window.__hold_file = ''; window.__release_file()")
+            await asyncio.sleep(0.15)
+            assert not fixture.rooms[TOKEN_A].uploads() and not fixture.rooms[TOKEN_B].uploads(), "A→B→A revived old file preparation"
+            await open_files(case)
+            await expect(p.locator("#upload-file")).to_be_enabled()
+
+
+async def test_room_tabs_old_file_network_results_stay_stale_after_return(browser):
+    data = b"An old activation's file bytes"
+    old_metadata = file_receipt(data, "old-network.bin")
+    fresh_metadata = file_receipt(b"Fresh file list", "fresh-network.bin")
+    for operation in ["upload", "list", "download"]:
+        held = asyncio.get_running_loop().create_future()
+
+        async def hold_result(body):
+            return await held
+
+        room_a = MailFixture(file_pages=[hold_result] if operation == "list" else [files_page(old_metadata)],
+            upload_results=[hold_result] if operation == "upload" else None,
+            download_results=[hold_result] if operation == "download" else None)
+        fixture = RoomFixture({TOKEN_A: room_a, TOKEN_B: MailFixture()})
+        async with BrowserCase(browser, fixture, init_script=FILE_BLOBS) as case:
+            p = case.page
+            downloads = []
+            p.on("download", lambda value: downloads.append(value))
+            await case.join()
+            await open_files(case)
+            if operation == "upload":
+                await choose_file(p, data, "old-network.bin")
+                await p.locator("#upload-file").click()
+                await wait_until(lambda: bool(room_a.uploads()))
+            elif operation == "download":
+                await expect(p.locator("article.file-item")).to_have_count(1)
+                await p.locator(".file-download").click()
+                await wait_until(lambda: bool(room_a.downloads()))
+            await p.locator("#close-files").click()
+            await add_room(case)
+            await switch_room(p, 1)
+            room_a.file_pages.append(files_page(fresh_metadata))
+            await open_files(case)
+            await expect(p.locator("#file-list")).to_contain_text(fresh_metadata["filename"])
+            held.set_result((201, old_metadata, {}) if operation == "upload" else
+                            files_page(old_metadata) if operation == "list" else (200, data, {}))
+            await asyncio.sleep(0.15)
+            assert not downloads and not await p.evaluate("window.__file_blobs"), "A→B→A revived an old download"
+            assert old_metadata["filename"] not in await p.locator("#file-list").inner_text(), "Old file callback overwrote a fresh activation list"
+            if operation == "upload":
+                await expect(p.locator("#retry-file")).to_be_visible()
+
+
+async def test_room_tabs_old_status_read_and_write_stay_stale_after_return(browser):
+    old_status = status_receipt("Old activation status", "red")
+    fresh_status = status_receipt("Fresh activation status", "blue")
+    for operation in ["read", "write"]:
+        held = asyncio.get_running_loop().create_future()
+
+        async def hold_result(body):
+            return await held
+
+        room_a = MailFixture(status_pages=[hold_result] if operation == "read" else None,
+                             status_results=[hold_result] if operation == "write" else None)
+        fixture = RoomFixture({TOKEN_A: room_a, TOKEN_B: MailFixture()})
+        async with BrowserCase(browser, fixture) as case:
+            p = case.page
+            await case.join()
+            await wait_until(lambda: bool(room_a.status_reads()))
+            if operation == "write":
+                await open_status(case)
+                await p.locator("#status-input").fill(old_status["text"])
+                await p.locator('input[name="status-color"][value="red"]').check()
+                await p.locator("#save-status").click()
+                await wait_until(lambda: bool(room_a.status_updates()))
+                await p.locator("#close-status").click()
+            await add_room(case)
+            room_a.status_pages.append({"status": fresh_status})
+            await switch_room(p, 1)
+            await expect(p.locator("#room-status-text")).to_have_text(fresh_status["text"])
+            held.set_result({"status": old_status} if operation == "read" else old_status)
+            await asyncio.sleep(0.15)
+            await expect(p.locator("#room-status-text")).to_have_text(fresh_status["text"])
+            await expect(p.locator("#room-status")).to_have_attribute("data-color", "blue")
+
+
+async def test_room_tabs_expiry_while_inactive_does_not_restore_old_data(browser):
+    expires = datetime.now(timezone.utc) + timedelta(seconds=20)
+    parent = receipt("Inactive expired parent", expires=expires)
+    child = receipt("Still-live child", reply_to=parent["id"])
+    metadata = file_receipt(b"expired file", "inactive-expired.bin", expires=expires)
+    status = status_receipt("Inactive expired status", "red", expires=expires)
+    fixture = RoomFixture({TOKEN_A: MailFixture([page_of(parent, child)],
+        file_pages=[files_page(metadata)], status_pages=[{"status": status}]), TOKEN_B: MailFixture()})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.clock.install()
+        await case.join()
+        await expect(p.locator("#room-status-text")).to_have_text(status["text"])
+        await choose_reply(p, parent)
+        await p.locator("#message-input").fill("A reply must not silently lose its expired parent")
+        await open_files(case)
+        await expect(p.locator("article.file-item")).to_have_count(1)
+        await p.locator("#close-files").click()
+        await add_room(case)
+        await p.clock.fast_forward(21_000)
+        await switch_room(p, 1)
+        await expect(p.locator("article.message")).to_have_count(1)
+        assert parent["message"] not in await p.locator("#messages").inner_text()
+        await expect(p.locator("#room-status-text")).to_have_text("Set room status")
+        await expect(p.locator("#reply-target")).to_be_visible()
+        assert parent["message"] not in await p.locator("#reply-target-text").inner_text()
+        await expect(p.locator("#send-button")).to_be_disabled()
+        await expect(message_row(p, child).locator(".reply-reference")).to_be_disabled()
+        await open_files(case)
+        await expect(p.locator("article.file-item")).to_have_count(0)
+        assert not fixture.rooms[TOKEN_A].downloads() and not fixture.rooms[TOKEN_A].sends()
+
+
+async def test_room_tabs_bound_keyboard_and_narrow_layout(browser):
+    tokens = [TOKEN_A, TOKEN_B] + [f"{index:064x}" for index in range(3, 9)]
+    fixture = RoomFixture({token: MailFixture() for token in tokens})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join()
+        for token in tokens[1:]:
+            await add_room(case, token)
+        await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(8)
+        await expect(p.locator("#add-room")).to_be_disabled()
+        for viewport in [{"width": 1280, "height": 900}, {"width": 390, "height": 844},
+                         {"width": 844, "height": 390}, {"width": 390, "height": 320}]:
+            await p.set_viewport_size(viewport)
+            await assert_layout(p)
+            active = await room_tab(p, 8).bounding_box()
+            assert active and active["x"] >= 0 and active["x"] + active["width"] <= viewport["width"], "Active tab is clipped instead of scrolled into view"
+        await room_tab(p, 8).focus()
+        await p.keyboard.press("Home")
+        await expect(room_tab(p, 1)).to_have_attribute("aria-selected", "true")
+        await expect(room_tab(p, 1)).to_be_focused()
+        await p.keyboard.press("ArrowRight")
+        await expect(room_tab(p, 2)).to_have_attribute("aria-selected", "true")
+        await p.keyboard.press("End")
+        await expect(room_tab(p, 8)).to_have_attribute("aria-selected", "true")
+        await p.keyboard.press("ArrowLeft")
+        await expect(room_tab(p, 7)).to_have_attribute("aria-selected", "true")
+        await p.get_by_role("button", name="Close Room 7", exact=True).click()
+        await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(7)
+        await expect(p.locator("#add-room")).to_be_enabled()
+        await p.locator("#leave-room").click()
+        await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(6)
+        await expect(p.locator("#chat-view")).to_be_visible()
+        while await p.locator('#room-tabs [role="tab"]').count():
+            await p.locator("#leave-room").click()
+        await expect(p.locator("#join-view")).to_be_visible()
+        assert await p.locator('#room-tabs [role="tab"]').count() == 0, "Closing every room did not reset the tab strip"
+        await expect(p.locator("#room-token")).to_have_value("")
+
+
+async def test_room_tabs_local_labels_screenshots_and_pagehide_forgets_every_room(browser):
+    fixture = RoomFixture({TOKEN_A: MailFixture([page_of(receipt("Tea-room dispatch: biscuits are ready", "tea-agent"))]),
+                           TOKEN_B: MailFixture([page_of(receipt("Workshop dispatch: the little robot is ready", "workshop-agent"))])})
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await p.locator("#room-label").fill("Tea break ☕")
+        await case.join(username="biscuit-inspector")
+        await p.locator("#message-input").fill("An inactive private draft")
+        await make_key(p)
+        await p.locator("#close-key").click()
+        await p.locator("#add-room").click()
+        await p.locator("#room-label").fill("Robot workshop 🤖")
+        await case.join(TOKEN_B, "robot-postmaster")
+        await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(2)
+        await expect(p.locator("#room-tabs")).to_contain_text("Tea break ☕")
+        await expect(p.locator("#room-tabs")).to_contain_text("Robot workshop 🤖")
+        assert not any("room_label" in request["body"] or "label" in request["body"] for request in fixture.requests), "Local tab labels were sent to the API"
+        await p.locator("#message-input").fill("A tiny robot needs a tiny hat.")
+        await expect(p.locator("#toast")).not_to_be_visible()
+        await assert_layout(p)
+        await p.screenshot(path="/tmp/psstoffice-chat-tabs-desktop.png", full_page=True)
+        await p.set_viewport_size({"width": 390, "height": 844})
+        await assert_layout(p)
+        await p.screenshot(path="/tmp/psstoffice-chat-tabs-mobile.png", full_page=True)
+        await p.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}))")
+        await expect(p.locator("#join-view")).to_be_visible()
+        assert await p.locator('#room-tabs [role="tab"]').count() == 0
+        await expect(p.locator("#room-token")).to_have_value("")
+        fixture.rooms[TOKEN_A].read_pages.append(EMPTY_PAGE.copy())
+        await case.join()
+        await expect(p.locator("#message-input")).to_have_value("")
+        await p.locator("#manage-key").click()
+        await expect(p.locator("#public-key")).to_have_value("")
+        await expect(p.locator("#signing-toggle")).not_to_be_checked()
+        assert "Tea-room dispatch" not in await p.locator("#messages").inner_text()
+    for label in ["🐦" * 32, "<svg/onload=window.__x=1>"]:
+        async with BrowserCase(browser) as case:
+            p = case.page
+            await p.locator("#room-token").fill(TOKEN_A)
+            for bad_label in ["🐦" * 33, "direction\u202echanger", "control\u0001character"]:
+                await p.locator("#room-label").fill(bad_label)
+                await p.locator("#join-button").click()
+                assert not case.fixture.requests, "An invalid local tab label reached the API"
+                await expect(p.locator("#join-view")).to_be_visible()
+            await p.locator("#room-label").fill(label)
+            await case.join()
+            await expect(p.locator('#room-tabs [role="tab"]')).to_have_text(label)
+            assert await p.locator("#room-tabs svg, #room-tabs img, #room-tabs script").count() == 0
+            assert await p.evaluate("window.__x === undefined"), "Tab label executed markup"
+
+
 async def main():
     tests = [
         test_token_and_privacy,
@@ -2090,6 +2641,20 @@ async def main():
         test_reply_rejects_malformed_metadata_and_missing_parent_ack,
         test_reply_composer_responsive_and_leave_clears_metadata,
         test_leaving_during_enriched_signing_does_not_revive_reply,
+        test_room_tabs_add_duplicate_cancel_close_and_privacy,
+        test_room_tabs_independent_composer_identity_reply_and_chatter,
+        test_room_tabs_restore_scroll_and_only_active_polls,
+        test_room_tabs_uncertain_send_keeps_exact_room_retry,
+        test_room_tabs_crypto_completions_stay_stale_after_return,
+        test_room_tabs_signed_retry_refresh_does_not_mutate_resumed_attempt,
+        test_room_tabs_old_read_is_stale_even_after_return,
+        test_room_tabs_files_status_and_upload_retry_are_independent,
+        test_room_tabs_file_preparation_stays_stale_after_return,
+        test_room_tabs_old_file_network_results_stay_stale_after_return,
+        test_room_tabs_old_status_read_and_write_stay_stale_after_return,
+        test_room_tabs_expiry_while_inactive_does_not_restore_old_data,
+        test_room_tabs_bound_keyboard_and_narrow_layout,
+        test_room_tabs_local_labels_screenshots_and_pagehide_forgets_every_room,
     ]
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
     async with async_playwright() as playwright:

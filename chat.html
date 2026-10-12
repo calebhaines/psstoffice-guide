@@ -55,6 +55,17 @@
     .token-input-wrap svg { width:19px; height:19px; }
     .field-note { font-size:.73rem; line-height:1.5; color:var(--muted); margin:8px 0 0; }
     #join-button { width:100%; margin-top:23px; padding:15px; }
+    #cancel-add-room { width:100%; margin-top:10px; }
+    .room-tabs-bar { display:flex; align-items:center; gap:10px; padding:8px 16px; background:#ecefdc; border-top:1px solid var(--line); border-bottom:1px solid var(--line); flex-shrink:0; }
+    #room-tabs { display:flex; gap:7px; min-width:0; flex:1; overflow-x:auto; scrollbar-width:thin; padding:3px; }
+    .room-tab-item { display:flex; align-items:center; flex-shrink:0; border:1px solid #bec8ad; border-radius:10px; overflow:hidden; background:#ffffff65; }
+    .room-tab-item:has([aria-selected="true"]) { background:var(--ink); border-color:var(--ink); }
+    .room-tab { padding:8px 9px 8px 12px; font-size:.77rem; border-radius:0; background:transparent; color:var(--ink); max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
+    .room-tab[aria-selected="true"],.room-tab-item:has([aria-selected="true"]) .close-room-tab { color:var(--white); }
+    .close-room-tab { background:transparent; color:var(--muted); font-size:1rem; padding:6px 9px; border-radius:0; line-height:1; }
+    .room-tab:hover:not(:disabled),.close-room-tab:hover:not(:disabled) { transform:none; background:#173c3a12; }
+    .room-tab:focus-visible,.close-room-tab:focus-visible { outline-offset:-3px; }
+    #add-room { flex-shrink:0; padding:8px 12px; font-size:.75rem; }
     .card-foot { font-size:.75rem; line-height:1.6; color:var(--muted); border-top:1px dashed var(--line); padding-top:18px; margin:23px 0 0; }
     .site-footer { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:0 0 24px; font-size:.72rem; color:var(--muted); }
     .site-footer a { color:inherit; text-underline-offset:3px; }
@@ -275,7 +286,15 @@
     .in-room .chat-header,.in-room #read-notice { flex-shrink:0; }
     .in-room .messages-wrap { overflow:hidden; min-height:60px; }
     .in-room .composer { min-height:0; max-height:50vh; max-height:50dvh; overflow-y:auto; }
+    body.adding-room { overflow:auto; }
+    .adding-room .shell { height:auto; min-height:100vh; min-height:100dvh; }
+    .adding-room .join-layout { min-height:0; padding:35px 24px; width:min(1150px,100%); margin:auto; }
     @media(max-width:620px) {
+    .room-tabs-bar { padding:5px 9px; gap:6px; }
+    .room-tab { padding:7px 7px 7px 10px; font-size:.69rem; max-width:145px; }
+    .close-room-tab { padding:6px 8px; }
+    #add-room { padding:7px 9px; font-size:.68rem; }
+    .adding-room .join-layout { padding:18px 14px; }
     .in-room .site-header { height:56px; padding:0 14px; }
     .in-room .room-sidebar { flex-shrink:0; max-height:38vh; max-height:38dvh; gap:10px; }
     .signing-section { flex:1; min-width:155px; border:0; padding:0; }
@@ -309,7 +328,12 @@
     .in-room .room-sidebar { gap:12px; padding:16px; }
     }
     @media(max-width:620px) and (max-height:560px) {
-    .in-room .room-sidebar { max-height:28vh; max-height:28dvh; padding:8px 12px; gap:8px; }
+    .in-room .room-sidebar { max-height:18vh; max-height:18dvh; padding:8px 12px; gap:8px; }
+    .room-tabs-bar { padding:2px 8px; }
+    #room-tabs { padding:2px; }
+    .room-tab { padding:5px 6px 5px 9px; }
+    .close-room-tab { padding:4px 7px; }
+    #add-room { padding:5px 8px; }
     .in-room .chat-header { padding:8px 12px; }
     .in-room .chat-header .sub { display:none; }
     .in-room .chat-signals { gap:3px; }
@@ -340,6 +364,7 @@
       <div class="brand"><svg viewBox="0 0 44 44" fill="none" aria-hidden="true"><rect x="3" y="8" width="38" height="29" rx="7" fill="#173c3a"/><path d="m7 13 15 12 15-12" stroke="#dbea91" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="36" cy="8" r="7" fill="#ee795f"/><path d="M36 5v6m-3-3h6" stroke="#173c3a" stroke-width="1.5"/></svg>PsstOffice<span class="sr-only"> personal chat</span></div>
       <div class="edition">Your pocket mailroom</div>
     </header>
+    <nav id="room-tabs-bar" class="room-tabs-bar" hidden aria-label="Open rooms"><div id="room-tabs" role="tablist" aria-label="Mailrooms"></div><button id="add-room" type="button" class="secondary">+ Add room</button></nav>
     <main id="join-view" class="join-layout">
       <section class="intro" aria-labelledby="welcome-heading">
         <div class="eyebrow">Small notes. Secret addresses.</div>
@@ -358,15 +383,17 @@
           <label for="username">Your name <span class="quiet">(optional)</span></label>
           <input id="username" placeholder="Anonymous postal enthusiast" autocomplete="off" aria-describedby="username-note">
           <p id="username-note" class="field-note">A friendly label, up to 64 characters. Names aren't verified identities.</p>
+          <label for="room-label">Tab name <span class="quiet">(optional)</span></label><input id="room-label" autocomplete="off" placeholder="Workshop, tea break, secret plans…" aria-describedby="room-label-note"><p id="room-label-note" class="field-note">Up to 32 characters. Only a label in this window.</p>
           <p id="join-error" class="error" role="alert"></p>
           <button id="join-button" type="submit">Enter the mailroom <span aria-hidden="true">→</span></button>
+          <button id="cancel-add-room" type="button" class="secondary" hidden>Cancel</button>
         </form>
         <p class="card-foot">Anyone with the token can read and write. Each note disappears from the API after two hours. This window keeps its token and notes in memory, without saving them to browser storage.</p>
       </section>
     </main>
     <main id="chat-view" class="chat-layout" hidden aria-label="Room chat">
       <aside class="room-sidebar" aria-label="Room controls">
-        <div class="room-heading"><div><div class="eyebrow">Secret address</div><h2>Your mailroom</h2></div><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="3" y="7" width="26" height="20" rx="4" stroke="currentColor" stroke-width="1.5"/><path d="m4 9 12 10L28 9" stroke="currentColor" stroke-width="1.5"/></svg></div>
+        <div class="room-heading"><div><div class="eyebrow">Secret address</div><h2 id="active-room-label">Your mailroom</h2></div><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="3" y="7" width="26" height="20" rx="4" stroke="currentColor" stroke-width="1.5"/><path d="m4 9 12 10L28 9" stroke="currentColor" stroke-width="1.5"/></svg></div>
         <div class="token-section"><label for="active-token">Room token</label><input id="active-token" type="password" readonly class="mono" autocomplete="off" spellcheck="false"><div class="token-actions"><button id="reveal-token" type="button" class="secondary small" aria-pressed="false">Show</button><button id="copy-token" type="button" class="secondary small">Copy token</button></div></div>
         <div class="username-section"><label for="active-username">Posting as <span class="quiet">(optional)</span></label><input id="active-username" autocomplete="off" placeholder="Anonymous"></div>
         <div class="signing-section"><div class="signing-row"><label class="signing-label" for="signing-toggle"><input id="signing-toggle" type="checkbox" disabled>Sign my notes</label><button id="manage-key" type="button" class="secondary small">Signing key</button></div><p id="signing-status">Optional. Your private key stays in this window.</p></div>
@@ -395,7 +422,7 @@
   <div id="announcements" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <dialog id="key-dialog" aria-labelledby="key-heading" aria-describedby="key-intro">
     <div class="dialog-heading"><h2 id="key-heading">Your little signing stamp</h2><button id="close-key" type="button" class="secondary small" aria-label="Close signing key dialog">Close</button></div>
-    <p id="key-intro" class="dialog-copy">An Ed25519 key gives your notes a recognizable signing identity. A valid signature proves control of that key, not a real-world identity. Your private key stays in page memory and is cleared when you leave or close the page.</p>
+    <p id="key-intro" class="dialog-copy">An Ed25519 key gives your notes a recognizable signing identity. A valid signature proves control of that key, not a real-world identity. Your private key stays in page memory for this room and is cleared when you leave this room or close the page.</p>
     <div class="key-actions"><button id="generate-key" type="button" class="small">Generate key</button><button id="export-key" type="button" class="secondary small" disabled>Download private key</button><button id="clear-key" type="button" class="secondary small" disabled>Clear key</button></div>
     <p class="field-note">To reuse your identity, deliberately download the private key and keep that file secret. It is unencrypted; anyone with the file can sign as this key. Nothing is saved automatically.</p>
     <label for="public-key">Public key <span class="quiet">(safe to share)</span></label><input id="public-key" class="mono" readonly autocomplete="off" placeholder="Generate or import a key"><p id="key-fingerprint" class="mono"></p><button id="copy-public-key" type="button" class="secondary small" disabled>Copy public key</button>
@@ -423,6 +450,7 @@
     const API = "https://psstoffice.89b84f87.nip.io";
     const MAX_BYTES = 16384;
     const HISTORY_LIMIT = 300;
+    const ROOM_LIMIT = 8;
     const RETRY_LIFETIME = 7200 * 1000;
     const SIGNING_FRESHNESS = 300;
     const MAX_KEY_BYTES = 4096;
@@ -437,6 +465,10 @@
     const $ = (id) => document.getElementById(id);
     const ui = Object.fromEntries(["join-view", "chat-view", "join-form", "room-token", "username", "join-error", "active-token", "active-username", "messages", "message-input", "message-type", "reply-target", "reply-target-text", "cancel-reply", "composer-form", "composer-error", "send-button", "byte-count", "connection-status", "read-notice", "pending-notice", "pending-text", "retry-send", "message-count", "new-messages", "announcements", "site-footer", "signing-toggle", "signing-status", "key-dialog", "manage-key", "generate-key", "import-key", "export-key", "clear-key", "public-key", "copy-public-key", "key-fingerprint", "key-import-text", "key-import-file", "key-error", "chatter-list", "filter-description", "open-files", "files-dialog", "file-input", "upload-file", "file-selection-name", "file-pending", "file-pending-text", "retry-file", "discard-file", "files-status", "files-error", "file-list", "room-status", "room-status-text", "status-dialog", "status-form", "status-input", "status-count", "save-status", "status-check", "status-error"].map((id) => [id, $(id)]));
     let session = null;
+    const rooms = [];
+    let roomSequence = 0;
+    let activeRoomId = null;
+    let roomsExpiryTimer = null;
     let toastTimer;
     let scrollFrame;
     const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
@@ -576,9 +608,9 @@
         if (!current(s) || s.key !== key || s.keyVersion !== version || s.pending) return;
         const encoded = btoa(String.fromCharCode(...bytes));
         const pem = "-----BEGIN PRIVATE KEY-----\n" + encoded.match(/.{1,64}/g).join("\n") + "\n-----END PRIVATE KEY-----\n";
-        const url = URL.createObjectURL(new Blob([pem], { type: "application/x-pem-file" }));
+        const url = URL.createObjectURL(new Blob([pem], { type: "application/x-pem-file" })); s.fileUrls.add(url);
         const link = document.createElement("a"); link.href = url; link.download = "psstoffice-signing-key.pem"; document.body.append(link); link.click(); link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        const timer = setTimeout(() => { URL.revokeObjectURL(url); s.fileUrls.delete(url); s.fileUrlTimers.delete(timer); }, 1000); s.fileUrlTimers.add(timer);
         toast("Private key downloaded. Keep that unencrypted file secret.");
       } catch { if (current(s)) ui["key-error"].textContent = "The private key couldn't be exported. Your key remains in this window."; }
       finally { bytes?.fill(0); if (current(s) && s.keyVersion === version) { s.keyBusy = false; refreshKeyUI(s); updateComposer(); } }
@@ -882,7 +914,7 @@
     }
     function updateFileControls(s) {
       if (!current(s)) return;
-      const pending = s.filePending; const selected = ui["file-input"].files[0];
+      const pending = s.filePending; const selected = s.selectedFile;
       const cooldown = Math.max(0, Math.ceil((s.nextFileUploadAt - Date.now()) / 1000));
       const locked = s.fileBusy || Boolean(pending);
       ui["file-input"].disabled = locked;
@@ -976,7 +1008,7 @@
     function stopFiles() { const s = session; if (!s) return; s.filesController?.abort(); s.filesController = null; }
     async function prepareFile(s) {
       if (!current(s) || s.fileBusy || s.filePending || Date.now() < s.nextFileUploadAt) return;
-      const file = ui["file-input"].files[0]; const username = ui["active-username"].value;
+      const file = s.selectedFile; const username = ui["active-username"].value;
       if (!file || file.size > MAX_FILE_BYTES) { ui["files-error"].textContent = "Choose one file of at most 1,000,000 bytes."; return; }
       if (!validUsername(username)) { ui["files-error"].textContent = "Your uploader name can contain at most 64 Unicode characters."; return; }
       const operation = ++s.fileVersion; s.fileBusy = true; ui["files-error"].textContent = ""; updateFileControls(s);
@@ -1002,7 +1034,7 @@
         if (!current(s) || s.filePending !== pending) return;
         s.files.set(file.id, file); s.fileUploadVersion++; while (s.files.size > HISTORY_LIMIT) s.files.delete(s.files.keys().next().value);
         s.nextFileUploadAt = Math.max(s.nextFileUploadAt, Date.parse(file.created_at) + 30000);
-        pending.payload.data_base64 = ""; s.filePending = null; ui["file-input"].value = ""; ui["files-error"].textContent = "";
+        pending.payload.data_base64 = ""; s.filePending = null; s.selectedFile = null; ui["file-input"].value = ""; ui["files-error"].textContent = "";
         renderFileList(s); updateFileControls(s); toast("File delivered. Here for two hours; downloads are unsigned."); announce("File delivered.");
       } catch (error) {
         if (!current(s) || s.filePending !== pending) return;
@@ -1027,15 +1059,6 @@
         toast("File downloaded. Opening untrusted files can be unsafe.");
       } catch (error) { if (filePanelCurrent(s, controller)) ui["files-error"].textContent = fileErrorText(error, true); }
       finally { bytes?.fill(0); s.fileDownloading.delete(file.id); if (filePanelCurrent(s, controller)) renderFileList(s); }
-    }
-    function clearFiles(s) {
-      s.fileVersion++; s.fileBusy = false; s.filesController?.abort(); s.filesController = null;
-      if (s.filePending) s.filePending.payload.data_base64 = "";
-      s.filePending = null; s.files.clear(); s.fileDownloading.clear(); s.nextFileUploadAt = 0;
-      for (const timer of s.fileUrlTimers) clearTimeout(timer); s.fileUrlTimers.clear();
-      for (const url of s.fileUrls) URL.revokeObjectURL(url); s.fileUrls.clear();
-      if (ui["files-dialog"].open) ui["files-dialog"].close();
-      ui["file-input"].value = ""; ui["file-input"].disabled = false; ui["file-list"].replaceChildren(); ui["files-error"].textContent = ""; ui["files-status"].textContent = ""; ui["file-pending-text"].textContent = ""; ui["file-pending"].hidden = true; ui["file-selection-name"].textContent = "Choose one file. Nothing uploads automatically."; ui["upload-file"].disabled = true; ui["upload-file"].textContent = "Upload file";
     }
     function validateReceipt(value) {
       if (!plainObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.id) || typeof value.message !== "string" || !value.message.length || !validUnicode(value.message) || encoder.encode(value.message).length > MAX_BYTES || !(value.username === null || (validUsername(value.username) && value.username.length))) throw new RequestError("protocol");
@@ -1360,44 +1383,145 @@
         ui["composer-error"].textContent = sendErrorText(error); updatePending(s);
       }
     }
-    function startSession(token, username) {
-      if (session) leaveRoom();
-      const s = { token, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, replyTo: null, replyUnavailable: false, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set(), roomStatus: null, statusBusy: false, statusCheckBusy: false, statusUncertain: false, statusRetryAt: 0, statusReadVersion: 0, statusWriteVersion: 0, statusDialogVersion: 0 };
-      session = s;
-      ui["signing-toggle"].checked = false; clearImportFields(); ui["key-error"].textContent = "";
-      s.supportPromise = supportsEd25519(s).then((supported) => { if (current(s)) { s.cryptoSupport = supported; refreshKeyUI(s); } return supported; });
-      ui["room-token"].value = ""; ui.username.value = ""; ui["join-error"].textContent = "";
-      ui["active-token"].value = token; ui["active-token"].type = "password"; $("reveal-token").textContent = "Show"; $("reveal-token").setAttribute("aria-pressed", "false");
-      ui["active-username"].value = username; ui["message-input"].value = ""; ui["composer-error"].textContent = ""; ui.messages.replaceChildren(); ui["read-notice"].hidden = true; ui["new-messages"].hidden = true;
-      ui["message-type"].value = "";
-      ui["join-view"].hidden = true; ui["chat-view"].hidden = false; ui["site-footer"].hidden = true;
-      document.body.classList.add("in-room");
-      setConnection(s, "connecting", "Connecting"); emptyState(s); refreshEmpty(s); updatePending(s); updateFileControls(s);
-      renderStatus(s); updateStatusControls(s);
-      s.expiryTimer = setInterval(() => expireMessages(s), 1000);
-      ui["message-input"].focus(); void readLoop(s); void statusLoop(s);
+    function newRoomState(token, username) {
+      return { token, username, draft: "", messageType: "", signingEnabled: false, scrollTop: 0, newNotes: false, composerError: "", fileError: "", selectedFile: null, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, replyTo: null, replyUnavailable: false, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set(), roomStatus: null, statusBusy: false, statusCheckBusy: false, statusUncertain: false, statusRetryAt: 0, statusReadVersion: 0, statusWriteVersion: 0, statusDialogVersion: 0 };
     }
-    function leaveRoom() {
-      const s = session;
-      if (!s) return;
+    function clonePending(pending) {
+      if (!pending) return null;
+      const payload = { ...pending.payload };
+      if (payload.signing) payload.signing = { ...payload.signing };
+      return { ...pending, payload, sending: false, retryAt: pending.sending ? Math.max(pending.retryAt, Date.now() + 1000) : pending.retryAt };
+    }
+    function clearJoinFields() {
+      ui["room-token"].value = ""; ui["room-token"].type = "password"; $("reveal-join-token").setAttribute("aria-pressed", "false"); $("reveal-join-token").setAttribute("aria-label", "Show room token");
+      ui.username.value = ""; $("room-label").value = ""; ui["join-error"].textContent = "";
+    }
+    function resetFilePanel() {
+      if (ui["files-dialog"].open) ui["files-dialog"].close();
+      ui["file-input"].value = ""; ui["file-input"].disabled = false; ui["file-list"].replaceChildren(); ui["files-error"].textContent = ""; ui["files-status"].textContent = ""; ui["file-pending-text"].textContent = ""; ui["file-pending"].hidden = true; ui["file-selection-name"].textContent = "Choose one file. Nothing uploads automatically."; ui["upload-file"].disabled = true; ui["upload-file"].textContent = "Upload file";
+    }
+    function parkSession() {
+      const s = session; if (!s) return;
+      s.username = ui["active-username"].value; s.draft = ui["message-input"].value; s.messageType = ui["message-type"].value; s.signingEnabled = ui["signing-toggle"].checked;
+      s.scrollTop = ui.messages.scrollTop; s.newNotes = !ui["new-messages"].hidden; s.composerError = ui["composer-error"].textContent; s.fileError = ui["files-error"].textContent;
+      // The old activation stays cancelled forever. Its in-flight callbacks may
+      // still finish, but never regain authority when this room is selected again.
       session = null; s.controller.abort(); clearInterval(s.expiryTimer); cancelAnimationFrame(scrollFrame); clearTimeout(toastTimer);
-      clearFiles(s);
-      s.roomStatus = null; s.statusWriteVersion++; s.statusReadVersion++; s.statusBusy = false; s.statusCheckBusy = false; s.statusUncertain = false; s.statusRetryAt = 0; closeStatus();
+      s.keyVersion++; s.keyBusy = false; s.fileVersion++; s.fileBusy = false;
+      s.pending = clonePending(s.pending); s.filePending = clonePending(s.filePending);
+      if (s.statusBusy) { s.statusUncertain = true; s.statusRetryAt = Math.max(s.statusRetryAt, Date.now() + 1000); }
+      s.statusBusy = false; s.statusCheckBusy = false; s.statusReadVersion++; s.statusWriteVersion++; s.statusDialogVersion++;
+      s.filesController?.abort(); s.filesController = null; s.fileDownloading.clear();
+      for (const timer of s.fileUrlTimers) clearTimeout(timer); s.fileUrlTimers.clear();
+      for (const url of s.fileUrls) URL.revokeObjectURL(url); s.fileUrls.clear();
+      if (ui["key-dialog"].open) ui["key-dialog"].close(); clearImportFields(); ui["key-error"].textContent = "";
+      closeStatus(); resetFilePanel();
+      $("toast").hidden = true; $("toast").textContent = ""; ui.announcements.textContent = "";
+      // Cached receipts are rebuilt with fresh event handlers on activation.
+      s.elements.clear(); ui.messages.replaceChildren();
+    }
+    function pruneSavedRoom(s) {
+      s.order = s.order.filter((id) => {
+        const receipt = s.messages.get(id);
+        if (Date.parse(receipt.expires_at) > Date.now()) return true;
+        s.messages.delete(id); s.elements.delete(id); s.ownIds.delete(id); return false;
+      });
+      if (!s.order.length) { s.trimmed = false; s.newNotes = false; }
+      for (const [id, file] of s.files) if (Date.parse(file.expires_at) <= Date.now()) s.files.delete(id);
+      if (s.roomStatus && Date.parse(s.roomStatus.expires_at) <= Date.now()) s.roomStatus = null;
+      if (s.filePending && Date.now() - s.filePending.startedAt >= RETRY_LIFETIME) { s.filePending.payload.data_base64 = ""; s.selectedFile = null; }
+    }
+    function updateRoomExpiry() {
+      for (const room of rooms) {
+        if (room.state === session) expireMessages(session);
+        else pruneSavedRoom(room.state);
+      }
+    }
+    function ensureActiveTabVisible() {
+      const tab = $("room-tab-" + activeRoomId); if (tab && !$("room-tabs-bar").hidden) tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    function renderRoomTabs() {
+      const list = $("room-tabs"); const focusedId = list.contains(document.activeElement) ? document.activeElement.closest("[data-room-id]")?.dataset.roomId : null;
+      const focusedClose = document.activeElement.classList.contains("close-room-tab"); list.replaceChildren();
+      for (const room of rooms) {
+        const item = document.createElement("div"); item.className = "room-tab-item"; item.setAttribute("role", "presentation");
+        const tab = document.createElement("button"); tab.type = "button"; tab.className = "room-tab"; tab.id = "room-tab-" + room.id; tab.dataset.roomId = String(room.id); tab.setAttribute("role", "tab"); tab.setAttribute("aria-selected", String(room.id === activeRoomId)); tab.setAttribute("aria-controls", "chat-view"); tab.tabIndex = room.id === activeRoomId ? 0 : -1; tab.textContent = room.label; tab.title = room.label; tab.addEventListener("click", () => activateRoom(room.id));
+        const close = document.createElement("button"); close.type = "button"; close.className = "close-room-tab"; close.dataset.roomId = String(room.id); close.textContent = "×"; close.setAttribute("aria-label", "Close " + room.label); close.title = "Close " + room.label; close.addEventListener("click", () => closeRoom(room.id));
+        item.append(tab, close); list.append(item);
+      }
+      $("room-tabs-bar").hidden = !rooms.length; $("add-room").disabled = rooms.length >= ROOM_LIMIT; $("add-room").title = rooms.length >= ROOM_LIMIT ? "Eight rooms are open. Close one to add another." : "Open another secret address";
+      if (focusedId) (list.querySelector((focusedClose ? ".close-room-tab" : ".room-tab") + '[data-room-id="' + focusedId + '"]') || $("room-tab-" + activeRoomId))?.focus({ preventScroll: true });
+      ensureActiveTabVisible();
+    }
+    function activateRoom(id, focusTab = false) {
+      const room = rooms.find((entry) => entry.id === id); if (!room) return;
+      if (session === room.state && !document.body.classList.contains("adding-room")) { if (focusTab) $("room-tab-" + id)?.focus({ preventScroll: true }); return; }
+      parkSession(); pruneSavedRoom(room.state);
+      const saved = room.state;
+      // Copy mutable collections and retry payloads. Sharing either with an old
+      // activation would let a delayed operation mutate the resumed room.
+      const s = { ...saved, controller: new AbortController(), elements: new Map(), messages: new Map(saved.messages), order: [...saved.order], ownIds: new Set(saved.ownIds), verificationKeys: new Map(saved.verificationKeys), files: new Map(saved.files), pending: clonePending(saved.pending), filePending: clonePending(saved.filePending), selectedChatterInfo: saved.selectedChatterInfo ? { ...saved.selectedChatterInfo } : null, keyBusy: false, fileBusy: false, filesController: null, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set(), supportPromise: null, expiryTimer: null, caughtUp: false, statusBusy: false, statusCheckBusy: false };
+      room.state = s; forgetRoomState(saved); session = s; activeRoomId = id;
+      clearJoinFields(); document.body.classList.remove("adding-room"); $("cancel-add-room").hidden = true; $("join-heading").textContent = "Open a mailroom";
+      ui["join-view"].hidden = true; ui["chat-view"].hidden = false; ui["site-footer"].hidden = true; document.body.classList.add("in-room");
+      ui["chat-view"].setAttribute("aria-labelledby", "room-tab-" + id); $("active-room-label").textContent = room.label;
+      ui["active-token"].value = s.token; ui["active-token"].type = "password"; $("reveal-token").textContent = "Show"; $("reveal-token").setAttribute("aria-pressed", "false");
+      ui["active-username"].value = s.username; ui["message-input"].value = s.draft; ui["message-type"].value = s.messageType; ui["composer-error"].textContent = s.composerError;
+      ui["signing-toggle"].checked = s.signingEnabled; clearImportFields(); ui["key-error"].textContent = "";
+      s.supportPromise = s.cryptoSupport === null ? supportsEd25519(s).then((supported) => { if (current(s)) { s.cryptoSupport = supported; refreshKeyUI(s); } return supported; }) : Promise.resolve(s.cryptoSupport);
+      resetFilePanel(); ui["files-error"].textContent = s.fileError; ui.messages.replaceChildren(); ui["read-notice"].hidden = true; ui["read-notice"].textContent = ""; ui["pending-text"].textContent = "";
+      for (const messageId of s.order) { const element = messageElement(s, s.messages.get(messageId), s.ownIds.has(messageId)); s.elements.set(messageId, element); ui.messages.append(element); }
+      if (s.trimmed) { const note = document.createElement("div"); note.className = "history-note"; note.textContent = "This window keeps the latest " + HISTORY_LIMIT + " live notes. Older notes are omitted from this window."; ui.messages.prepend(note); }
+      renderRoomTabs(); refreshEmpty(s); updatePending(s); updateFileControls(s); renderStatus(s); updateStatusControls(s);
+      ui.messages.scrollTop = s.scrollTop; ui["new-messages"].hidden = !s.newNotes;
+      setConnection(s, "connecting", "Connecting");
+      if (!roomsExpiryTimer) roomsExpiryTimer = setInterval(updateRoomExpiry, 1000);
+      if (focusTab) $("room-tab-" + id)?.focus({ preventScroll: true }); else ui["message-input"].focus({ preventScroll: true });
+      void readLoop(s); void statusLoop(s);
+    }
+    function startSession(token, username, label = "") {
+      const existing = rooms.find((room) => room.state.token === token);
+      if (existing) { activateRoom(existing.id); toast("That mailroom is already open. Welcome back."); return; }
+      if (rooms.length >= ROOM_LIMIT) { ui["join-error"].textContent = "Eight rooms are open. Close a room tab before adding another."; return; }
+      const id = ++roomSequence; rooms.push({ id, label: label || "Room " + id, state: newRoomState(token, username) }); activateRoom(id);
+    }
+    function addRoom() {
+      if (!rooms.length || rooms.length >= ROOM_LIMIT || document.body.classList.contains("adding-room")) return;
+      const username = ui["active-username"].value; parkSession(); clearJoinFields(); ui.username.value = username;
+      ui["chat-view"].hidden = true; ui["join-view"].hidden = false; document.body.classList.add("adding-room"); $("cancel-add-room").hidden = false; $("join-heading").textContent = "Add a mailroom"; ui["room-token"].focus();
+    }
+    function cancelAddRoom() { if (document.body.classList.contains("adding-room")) activateRoom(activeRoomId); }
+    function forgetRoomState(s) {
+      s.controller.abort(); s.filesController?.abort(); clearInterval(s.expiryTimer); s.keyVersion++; s.fileVersion++;
+      if (s.filePending) s.filePending.payload.data_base64 = "";
+      s.token = ""; s.username = ""; s.draft = ""; s.messageType = ""; s.composerError = ""; s.fileError = ""; s.pending = null; s.filePending = null; s.selectedFile = null; s.replyTo = null; s.cursor = null; s.key = null; s.supportPromise = null; s.roomStatus = null; s.selectedChatterInfo = null;
+      s.messages.clear(); s.elements.clear(); s.ownIds.clear(); s.order.length = 0; s.verificationKeys.clear(); s.files.clear(); s.fileDownloading.clear();
+      for (const timer of s.fileUrlTimers) clearTimeout(timer); s.fileUrlTimers.clear(); for (const url of s.fileUrls) URL.revokeObjectURL(url); s.fileUrls.clear();
+    }
+    function resetHome() {
+      session = null; activeRoomId = null; clearInterval(roomsExpiryTimer); roomsExpiryTimer = null; cancelAnimationFrame(scrollFrame); clearTimeout(toastTimer);
+      resetFilePanel(); closeStatus(); clearJoinFields();
+      if (ui["key-dialog"].open) ui["key-dialog"].close(); clearImportFields();
       ui["room-status-text"].textContent = "Set room status"; ui["room-status"].dataset.color = "unset"; ui["room-status"].setAttribute("aria-label", "Set room status"); ui["room-status"].removeAttribute("title");
       ui["status-input"].disabled = false; for (const radio of ui["status-form"].querySelectorAll('input[name="status-color"]')) { radio.disabled = false; radio.checked = radio.value === "green"; } ui["save-status"].disabled = true; ui["save-status"].textContent = "Save room status"; ui["status-check"].disabled = false; ui["status-check"].textContent = "Check current status";
-      s.token = ""; s.pending = null; s.replyTo = null; s.replyUnavailable = false; s.cursor = null; s.messages.clear(); s.elements.clear(); s.ownIds.clear(); s.order.length = 0;
-      s.keyVersion++; s.key = null; s.keyBusy = false; s.verificationKeys.clear(); s.selectedChatter = "all"; s.selectedChatterInfo = null;
-      if (ui["key-dialog"].open) ui["key-dialog"].close(); clearImportFields();
-      ui["signing-toggle"].checked = false; ui["signing-toggle"].disabled = true; ui["public-key"].value = ""; ui["key-fingerprint"].textContent = ""; ui["key-error"].textContent = ""; ui["chatter-list"].replaceChildren(); ui["filter-description"].textContent = ""; ui["filter-description"].hidden = true;
-      ui["signing-status"].textContent = "Optional. Your private key stays in this window.";
-      ui.messages.replaceChildren(); ui["active-token"].value = ""; ui["active-username"].value = ""; ui["active-username"].disabled = false; ui["message-input"].value = ""; ui["message-input"].readOnly = false;
+      ui["signing-toggle"].checked = false; ui["signing-toggle"].disabled = true; ui["public-key"].value = ""; ui["key-fingerprint"].textContent = ""; ui["key-error"].textContent = ""; ui["chatter-list"].replaceChildren(); ui["filter-description"].textContent = ""; ui["filter-description"].hidden = true; ui["signing-status"].textContent = "Optional. Your private key stays in this window.";
+      ui.messages.replaceChildren(); ui["active-token"].value = ""; ui["active-token"].type = "password"; $("reveal-token").textContent = "Show"; $("reveal-token").setAttribute("aria-pressed", "false"); ui["active-username"].value = ""; ui["active-username"].disabled = false; ui["message-input"].value = ""; ui["message-input"].readOnly = false;
       ui["message-type"].value = ""; ui["message-type"].disabled = false; ui["reply-target"].hidden = true; delete ui["reply-target"].dataset.state; ui["reply-target-text"].textContent = ""; ui["reply-target-text"].removeAttribute("title"); ui["cancel-reply"].disabled = false;
-      ui["room-token"].value = ""; ui["room-token"].type = "password"; $("reveal-join-token").setAttribute("aria-pressed", "false"); $("reveal-join-token").setAttribute("aria-label", "Show room token"); ui.username.value = ""; ui["join-error"].textContent = "";
-      ui["composer-error"].textContent = ""; ui["read-notice"].textContent = ""; ui["pending-text"].textContent = ""; ui["pending-notice"].hidden = true; ui["new-messages"].hidden = true;
-      $("toast").hidden = true; $("toast").textContent = ""; ui.announcements.textContent = "";
-      ui["message-count"].textContent = "0 notes"; ui["connection-status"].textContent = "Disconnected"; ui["connection-status"].dataset.state = "offline";
-      ui["chat-view"].hidden = true; ui["join-view"].hidden = false; ui["site-footer"].hidden = false; updateComposer(); ui["room-token"].focus();
-      document.body.classList.remove("in-room");
+      ui["composer-error"].textContent = ""; ui["read-notice"].textContent = ""; ui["pending-text"].textContent = ""; ui["pending-notice"].hidden = true; ui["new-messages"].hidden = true; $("toast").hidden = true; $("toast").textContent = ""; ui.announcements.textContent = "";
+      ui["message-count"].textContent = "0 notes"; ui["connection-status"].textContent = "Disconnected"; ui["connection-status"].dataset.state = "offline"; ui["chat-view"].removeAttribute("aria-labelledby");
+      ui["chat-view"].hidden = true; ui["join-view"].hidden = false; ui["site-footer"].hidden = false; $("cancel-add-room").hidden = true; $("join-heading").textContent = "Open a mailroom"; document.body.classList.remove("in-room", "adding-room"); renderRoomTabs(); updateComposer(); ui["room-token"].focus();
+    }
+    function closeRoom(id) {
+      const index = rooms.findIndex((room) => room.id === id); if (index < 0) return;
+      const closingActive = id === activeRoomId; if (closingActive) parkSession();
+      const [room] = rooms.splice(index, 1); forgetRoomState(room.state);
+      if (!rooms.length) { resetHome(); return; }
+      if (closingActive) activateRoom(rooms[Math.min(index, rooms.length - 1)].id, true);
+      else renderRoomTabs();
+    }
+    function leaveRoom() { if (activeRoomId !== null) closeRoom(activeRoomId); }
+    function forgetAllRooms() {
+      parkSession(); for (const room of rooms) forgetRoomState(room.state); rooms.length = 0; resetHome();
     }
     async function copyToken() {
       const s = session; if (!s) return;
@@ -1418,7 +1542,18 @@
       const token = ui["room-token"].value; const username = ui.username.value;
       if (!/^[A-Za-z0-9]{64}$/.test(token)) { ui["join-error"].textContent = "Use exactly 64 ASCII letters or digits. No spaces; case matters."; ui["room-token"].focus(); return; }
       if (!validUsername(username)) { ui["join-error"].textContent = "Your name can contain at most 64 Unicode characters."; ui.username.focus(); return; }
-      startSession(token, username);
+      const label = $("room-label").value;
+      if (Array.from(label).length > 32 || !validUnicode(label) || /[\p{Cc}\p{Cs}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(label)) { ui["join-error"].textContent = "Use a tab name of at most 32 characters, without control or direction-changing characters."; $("room-label").focus(); return; }
+      startSession(token, username, label.trim());
+    });
+    $("add-room").addEventListener("click", addRoom);
+    $("cancel-add-room").addEventListener("click", cancelAddRoom);
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && document.body.classList.contains("adding-room")) { event.preventDefault(); cancelAddRoom(); } });
+    $("room-tabs").addEventListener("keydown", (event) => {
+      if (!event.target.matches(".room-tab") || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault(); const index = rooms.findIndex((room) => String(room.id) === event.target.dataset.roomId);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? rooms.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + rooms.length) % rooms.length;
+      activateRoom(rooms[next].id, true);
     });
     $("generate-token").addEventListener("click", () => {
       try { ui["room-token"].value = randomHex(32); ui["join-error"].textContent = ""; toast("A fresh secret address, generated locally."); }
@@ -1439,12 +1574,12 @@
     $("close-files").addEventListener("click", () => { stopFiles(); ui["files-dialog"].close(); });
     ui["files-dialog"].addEventListener("close", () => { if (!ui["files-dialog"].open) stopFiles(); });
     ui["files-dialog"].addEventListener("cancel", stopFiles);
-    ui["file-input"].addEventListener("change", () => { if (session) { ui["files-error"].textContent = ""; updateFileControls(session); } });
+    ui["file-input"].addEventListener("change", () => { if (session) { session.selectedFile = ui["file-input"].files[0] || null; ui["files-error"].textContent = ""; updateFileControls(session); } });
     ui["upload-file"].addEventListener("click", () => { if (session) void prepareFile(session); });
     ui["retry-file"].addEventListener("click", () => { if (session) void sendFilePending(session); });
     ui["discard-file"].addEventListener("click", () => {
       const s = session; if (!s?.filePending || s.filePending.sending || Date.now() - s.filePending.startedAt < RETRY_LIFETIME) return;
-      s.filePending.payload.data_base64 = ""; s.filePending = null; ui["file-input"].value = ""; updateFileControls(s);
+      s.filePending.payload.data_base64 = ""; s.filePending = null; s.selectedFile = null; ui["file-input"].value = ""; updateFileControls(s);
       ui["files-error"].textContent = "Old retry cleared. Choose a file to make a new upload; it may create a second copy.";
     });
     ui["manage-key"].addEventListener("click", () => { if (session && !session.pending) { refreshKeyUI(session); ui["key-error"].textContent = ""; ui["key-dialog"].showModal(); } });
@@ -1487,9 +1622,10 @@
     });
     ui["new-messages"].addEventListener("click", scrollToBottom);
     ui.messages.addEventListener("scroll", () => { if (nearBottom()) ui["new-messages"].hidden = true; }, { passive: true });
+    window.addEventListener("resize", ensureActiveTabVisible);
     window.addEventListener("offline", () => { if (session) setConnection(session, "offline", "Offline"); });
     window.addEventListener("online", () => { if (session) setConnection(session, "reconnecting", "Reconnecting"); });
-    window.addEventListener("pagehide", leaveRoom);
+    window.addEventListener("pagehide", forgetAllRooms);
     document.addEventListener("visibilitychange", () => { if (!document.hidden && session) expireMessages(session); });
     updateComposer();
   </script>
