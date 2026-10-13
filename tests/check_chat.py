@@ -153,7 +153,7 @@ class MailFixture:
 
     def __init__(self, read_pages=None, send_results=None, publish_appends=True,
                  file_pages=None, upload_results=None, download_results=None,
-                 status_pages=None, status_results=None):
+                 status_pages=None, status_results=None, max_file_bytes=1_000_000):
         self.read_pages = deque([EMPTY_PAGE.copy()] if read_pages is None else read_pages)
         self.send_results = deque(send_results or [])
         self.publish_appends = publish_appends
@@ -169,6 +169,7 @@ class MailFixture:
         self.status_pages = deque(status_pages or [])
         self.status_results = deque(status_results or [])
         self.room_status = {}
+        self.max_file_bytes = max_file_bytes
 
     async def handle(self, route):
         request = route.request
@@ -178,15 +179,26 @@ class MailFixture:
                 status=204,
                 headers={
                     "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST",
-                    "Access-Control-Allow-Headers": "Content-Type, X-Room-Token",
+                    "Access-Control-Allow-Methods": "GET, POST",
+                    "Access-Control-Allow-Headers": "Content-Type, X-Room-Token, X-File-Name, X-File-Username, X-File-Size, X-Client-File-ID",
                 },
             )
             return
-        body = json.loads(request.post_data or "{}")
+        if request.url == BASE + "/v1/files/upload":
+            body = {"filename": from_b64url(headers["x-file-name"]).decode("utf-8"),
+                    "data": request.post_data_buffer or b"", "size_bytes": int(headers["x-file-size"]),
+                    "client_file_id": headers["x-client-file-id"]}
+            if "x-file-username" in headers:
+                body["username"] = from_b64url(headers["x-file-username"]).decode("utf-8")
+        else:
+            body = json.loads(request.post_data or "{}")
         record = {"url": request.url, "body": body, "headers": headers, "time": time.monotonic()}
         self.requests.append(record)
-        if request.url == BASE + "/v1/messages/read":
+        if request.url == BASE + "/":
+            assert request.method == "GET" and "x-room-token" not in headers
+            result = {"service": "PsstOffice", "max_file_bytes": self.max_file_bytes,
+                      "max_file_storage_bytes": 5_000_000_000}
+        elif request.url == BASE + "/v1/messages/read":
             if self.read_pages:
                 result = self.read_pages.popleft()
             else:
@@ -209,11 +221,11 @@ class MailFixture:
             else:
                 token = headers.get("x-room-token")
                 result = files_page(*self.file_metadata.get(token, {}).values())
-        elif request.url == BASE + "/v1/files":
+        elif request.url in {BASE + "/v1/files", BASE + "/v1/files/upload"}:
             if self.upload_results:
                 result = self.upload_results.popleft()
             else:
-                data = base64.b64decode(body["data_base64"], validate=True)
+                data = body["data"] if "data" in body else base64.b64decode(body["data_base64"], validate=True)
                 metadata = file_receipt(data, body["filename"], body.get("username"))
                 result = (201, metadata, {})
         elif request.url == BASE + "/v1/files/download":
@@ -244,10 +256,10 @@ class MailFixture:
             status, value, extra_headers = 200, result, {}
         if request.url == BASE + "/v1/messages" and status == 201:
             self.append_receipts.append(value)
-        if request.url == BASE + "/v1/files" and status == 201:
+        if request.url in {BASE + "/v1/files", BASE + "/v1/files/upload"} and status == 201:
             token = headers.get("x-room-token")
             self.file_metadata.setdefault(token, {})[value["id"]] = value
-            self.file_bytes[value["id"]] = base64.b64decode(body["data_base64"], validate=True)
+            self.file_bytes[value["id"]] = body["data"] if "data" in body else base64.b64decode(body["data_base64"], validate=True)
         if request.url == BASE + "/v1/status" and status == 200:
             self.room_status[headers.get("x-room-token")] = value
         if request.url == BASE + "/v1/messages" and status == 201 and self.publish_appends:
@@ -286,7 +298,7 @@ class MailFixture:
         return [r for r in self.requests if r["url"].endswith("/files/read")]
 
     def uploads(self):
-        return [r for r in self.requests if r["url"].endswith("/files")]
+        return [r for r in self.requests if r["url"].endswith(("/files", "/files/upload"))]
 
     def downloads(self):
         return [r for r in self.requests if r["url"].endswith("/files/download")]
@@ -387,7 +399,7 @@ class RoomFixture:
 
     async def handle(self, route):
         headers = await route.request.all_headers()
-        if route.request.method == "OPTIONS":
+        if route.request.method == "OPTIONS" or route.request.url == BASE + "/":
             fixture = next(iter(self.rooms.values()))
         else:
             token = headers.get("x-room-token")
@@ -1308,7 +1320,7 @@ async def test_file_browser_rejects_malformed_metadata(browser):
     cases = [
         {"filename": "../unsafe.txt"},
         {"filename": "hidden\u202eexe.txt"},
-        {"size_bytes": 1_000_001},
+        {"size_bytes": 500_000_001},
         {"size_bytes": True},
         {"sha256": "A" * 64},
         {"extra_field": "untrusted"},
@@ -2590,6 +2602,247 @@ async def test_room_tabs_local_labels_screenshots_and_pagehide_forgets_every_roo
             assert await p.evaluate("window.__x === undefined"), "Tab label executed markup"
 
 
+VIRTUAL_STREAM_UPLOAD = """
+window.__raw_uploads = [];
+window.__file_array_buffer_calls = 0;
+const originalFileArrayBuffer = File.prototype.arrayBuffer;
+File.prototype.arrayBuffer = function(...args) {
+  window.__file_array_buffer_calls++;
+  if (this.size > 1000000) throw new Error('Large files must never be buffered');
+  return originalFileArrayBuffer.apply(this, args);
+};
+window.__file_timeouts = [];
+const originalFileTimeout = window.setTimeout;
+window.setTimeout = function(callback, delay, ...args) {
+  if (delay === 900000) window.__file_timeouts.push(delay);
+  return originalFileTimeout(callback, delay, ...args);
+};
+const originalStreamFetch = window.fetch.bind(window);
+window.fetch = async (url, options = {}) => {
+  if (!String(url).endsWith('/v1/files/upload')) return originalStreamFetch(url, options);
+  const headers = options.headers;
+  const decode = value => new TextDecoder().decode(Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0)));
+  const record = {headers: {...headers}, filename: decode(headers['X-File-Name']),
+    username: headers['X-File-Username'] ? decode(headers['X-File-Username']) : null,
+    isFile: options.body instanceof File, sameFile: options.body === window.__virtual_file,
+    size: options.body.size, signal: options.signal, body: options.body};
+  window.__raw_uploads.push(record);
+  if (window.__raw_mode === 'abort') { window.__raw_mode = ''; throw new TypeError('Synthetic interrupted upload'); }
+  const now = Date.now();
+  const value = {id: 'aabbccdd-0123-4567-89ab-0123456789ab', filename: record.filename,
+    username: record.username, size_bytes: record.size, sha256: '0'.repeat(64),
+    created_at: new Date(now).toISOString(), expires_at: new Date(now + 7200000).toISOString()};
+  if (window.__raw_mode === 'hold') return new Promise(resolve => { window.__release_raw_upload = () => resolve(new Response(JSON.stringify(value), {status:201, headers:{'Content-Type':'application/json'}})); });
+  return new Response(JSON.stringify(value), {status:201, headers:{'Content-Type':'application/json'}});
+};
+window.__select_virtual_file = size => {
+  const file = new File(['Tiny test backing data; no giant allocation.'], 'parcel 🐦.bin');
+  Object.defineProperty(file, 'size', {value:size}); window.__virtual_file = file;
+  const transfer = new DataTransfer(); transfer.items.add(file);
+  const input = document.querySelector('#file-input'); input.files = transfer.files;
+  input.dispatchEvent(new Event('change', {bubbles:true}));
+};
+"""
+
+STREAM_SAVE_PICKER = """
+window.__stream_save = {names: [], writes: [], closed:0, aborted:0, total:0, digest:null};
+window.showSaveFilePicker = async options => {
+  const record = window.__stream_save; record.names.push(options.suggestedName);
+  return {createWritable: async () => ({
+    write: async bytes => {
+      if (window.__hold_stream_write) await new Promise(resolve => { window.__release_stream_write = resolve; });
+      if (record.aborted) throw new Error('Writer aborted');
+      record.total += bytes.byteLength; record.writes.push(new Uint8Array(bytes));
+    },
+    close: async () => {
+      const bytes = new Uint8Array(record.total); let offset = 0;
+      for (const piece of record.writes) { bytes.set(piece, offset); offset += piece.length; }
+      record.digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value => value.toString(16).padStart(2,'0')).join('');
+      record.closed++; record.writes = [];
+    },
+    abort: async () => { record.aborted++; record.writes = []; window.__release_stream_write?.(); }
+  })};
+};
+"""
+
+
+async def test_stream_sha256_matches_independent_vectors_and_chunk_boundaries(browser):
+    async with BrowserCase(browser) as case:
+        # Padding boundaries, binary bytes, empty data, and multi-megabyte input.
+        for length in [0, 1, 55, 56, 63, 64, 65, 127, 128, 129, 1_000_137]:
+            expected = hashlib.sha256(bytes(index % 251 for index in range(length))).hexdigest()
+            for chunk in [1, 63, 65, 65536] if length < 130 else [65536]:
+                value = await case.page.evaluate("""({length,chunk}) => {
+                  const hash = new StreamSha256();
+                  for (let offset=0; offset<length; offset+=chunk) {
+                    const bytes = new Uint8Array(Math.min(chunk,length-offset));
+                    for (let index=0; index<bytes.length; index++) bytes[index]=(offset+index)%251;
+                    hash.update(bytes);
+                  }
+                  return {digest:hash.digest(), block:hash.block.length, words:hash.words.length};
+                }""", {"length": length, "chunk": chunk})
+                assert value == {"digest": expected, "block": 64, "words": 64}
+
+
+async def test_stream_upload_maximum_uses_file_body_without_large_allocation(browser):
+    fixture = MailFixture(max_file_bytes=500_000_000)
+    async with BrowserCase(browser, fixture, init_script=VIRTUAL_STREAM_UPLOAD) as case:
+        p = case.page
+        await case.join(username="郵便 🐦")
+        await open_files(case)
+        await expect(p.locator('#files-intro')).to_contain_text('500,000,000 bytes')
+        await p.evaluate('window.__select_virtual_file(500000001)')
+        await expect(p.locator('#upload-file')).to_be_disabled()
+        assert not await p.evaluate('window.__raw_uploads.length')
+        await p.evaluate('window.__select_virtual_file(500000000)')
+        await expect(p.locator('#upload-file')).to_be_enabled()
+        await p.locator('#upload-file').click()
+        await expect(p.locator('#file-list')).to_contain_text('parcel 🐦.bin')
+        record = await p.evaluate("""() => {const r=window.__raw_uploads[0]; return {headers:r.headers,filename:r.filename,username:r.username,isFile:r.isFile,sameFile:r.sameFile,size:r.size};}""")
+        assert record['isFile'] and record['sameFile'] and record['size'] == 500_000_000
+        assert record['filename'] == 'parcel 🐦.bin' and record['username'] == '郵便 🐦'
+        assert record['headers']['X-Room-Token'] == TOKEN_A
+        assert record['headers']['Content-Type'] == 'application/octet-stream'
+        assert record['headers']['X-File-Size'] == '500000000'
+        assert re.fullmatch('[0-9a-f]{32}', record['headers']['X-Client-File-ID'])
+        assert await p.evaluate('window.__file_array_buffer_calls') == 0
+        assert await p.evaluate('window.__file_timeouts') == [900_000]
+        assert not fixture.uploads(), 'Virtual large upload must not allocate or transfer 500 MB'
+
+
+async def test_stream_upload_actual_bytes_headers_and_file_space_full(browser):
+    data = bytes(range(251)) * 3985
+    assert len(data) > 1_000_000
+    fixture = MailFixture(max_file_bytes=500_000_000, upload_results=[
+        (503, {'error': {'code': 'file_space_full', 'message': TOKEN_A + ' private server detail'}}, {'Retry-After': '30'})])
+    async with BrowserCase(browser, fixture) as case:
+        p = case.page
+        await case.join(username='stream-agent')
+        await open_files(case)
+        await choose_file(p, data, 'stream.bin')
+        await p.locator('#upload-file').click()
+        await wait_until(lambda: len(fixture.uploads()) == 1)
+        await expect(p.locator('#files-error')).to_contain_text('File space full')
+        request = fixture.uploads()[0]
+        assert request['url'].endswith('/v1/files/upload')
+        assert request['body']['data'] == data and request['body']['size_bytes'] == len(data)
+        assert 'data_base64' not in request['body']
+        assert request['headers']['x-file-size'] == str(len(data))
+        assert TOKEN_A not in await p.locator('#files-dialog').inner_text()
+        await expect(p.locator('#retry-file')).to_be_disabled()
+        await asyncio.sleep(.1)
+        assert len(fixture.uploads()) == 1, 'Full file storage must never trigger automatic re-upload'
+
+
+async def test_stream_upload_retry_and_stale_response_survive_room_tabs(browser):
+    fixture = RoomFixture({TOKEN_A:MailFixture(max_file_bytes=500_000_000), TOKEN_B:MailFixture(max_file_bytes=500_000_000)})
+    async with BrowserCase(browser, fixture, init_script=VIRTUAL_STREAM_UPLOAD) as case:
+        p = case.page
+        await case.join(username='original uploader')
+        await open_files(case)
+        await p.evaluate("window.__raw_mode='abort'; window.__select_virtual_file(500000000)")
+        await p.locator('#upload-file').click()
+        await expect(p.locator('#file-pending')).to_be_visible()
+        await p.locator('#close-files').click()
+        await add_room(case)
+        await room_tab(p, 1).click()
+        await p.locator('#active-username').fill('changed uploader')
+        await open_files(case)
+        await expect(p.locator('#retry-file')).to_be_enabled()
+        await p.evaluate("window.__raw_mode='hold'")
+        await p.locator('#retry-file').click()
+        await p.wait_for_function('window.__raw_uploads.length === 2')
+        assert await p.evaluate("""() => {
+          const [a,b]=window.__raw_uploads; return a.body===b.body && JSON.stringify(a.headers)===JSON.stringify(b.headers);
+        }"""), 'Resuming a room must retry exactly the same immutable File and original metadata'
+        await p.locator('#close-files').click()
+        await room_tab(p, 2).click()
+        await room_tab(p, 1).click()
+        await p.evaluate('window.__release_raw_upload()')
+        await open_files(case)
+        await expect(p.locator('#file-pending')).to_be_visible()
+        assert 'parcel 🐦.bin' not in await p.locator('#file-list').inner_text(), 'An old activation acknowledged a stale large upload'
+        assert await p.evaluate('window.__raw_uploads[1].signal.aborted')
+        assert await p.evaluate('window.__file_array_buffer_calls') == 0
+
+
+async def test_large_live_files_remain_downloadable_after_upload_limit_reverts(browser):
+    data = b'Large downloadable temporary parcel.' * 30001
+    assert len(data) > 1_000_000
+    metadata = file_receipt(data, 'large-after-revert.bin')
+    fixture = MailFixture(max_file_bytes=1_000_000, file_pages=[files_page(metadata)], download_results=[(200,data,{})])
+    async with BrowserCase(browser, fixture, init_script=STREAM_SAVE_PICKER + FILE_BLOBS + CHUNKED_DOWNLOAD) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        await expect(p.locator('#files-intro')).to_contain_text('1,000,000 bytes')
+        await p.locator('.file-download').click()
+        await p.wait_for_function('window.__stream_save.closed === 1')
+        saved = await p.evaluate('window.__stream_save')
+        assert saved['digest'] == metadata['sha256'] and saved['total'] == len(data)
+        assert saved['names'] == ['large-after-revert.bin'] and saved['aborted'] == 0
+        assert not await p.evaluate('window.__file_blobs'), 'Streamed files must not become large Blob URLs'
+
+
+async def test_stream_download_aborts_tampered_truncated_or_oversized_files(browser):
+    data = b'The immutable streaming parcel.' * 40001
+    metadata = file_receipt(data, 'stream-check.bin')
+    for downloaded in [data[:-1], b'!' + data[1:], data + b'!']:
+        fixture = MailFixture(file_pages=[files_page(metadata)], download_results=[(200,downloaded,{})])
+        async with BrowserCase(browser, fixture, init_script=STREAM_SAVE_PICKER + FILE_BLOBS + CHUNKED_DOWNLOAD) as case:
+            p = case.page
+            await case.join()
+            await open_files(case)
+            await p.locator('.file-download').click()
+            await expect(p.locator('#files-error')).not_to_have_text('')
+            saved = await p.evaluate('window.__stream_save')
+            assert saved['closed'] == 0 and saved['aborted'] > 0
+            assert not await p.evaluate('window.__file_blobs')
+
+
+async def test_stream_download_room_change_aborts_uncommitted_file(browser):
+    data = b'Secret bytes from an old activation.' * 30001
+    metadata = file_receipt(data, 'stale-stream.bin')
+    fixture = RoomFixture({TOKEN_A:MailFixture(file_pages=[files_page(metadata)], download_results=[(200,data,{})]), TOKEN_B:MailFixture()})
+    async with BrowserCase(browser, fixture, init_script=STREAM_SAVE_PICKER + FILE_BLOBS + CHUNKED_DOWNLOAD) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        await p.evaluate('window.__hold_stream_write=true')
+        await p.locator('.file-download').click()
+        await p.wait_for_function("typeof window.__release_stream_write === 'function'")
+        await p.locator('#close-files').click()
+        await add_room(case)
+        await room_tab(p,1).click()
+        await asyncio.sleep(.1)
+        saved = await p.evaluate('window.__stream_save')
+        assert saved['closed'] == 0 and saved['aborted'] > 0
+        assert not await p.evaluate('window.__file_blobs')
+
+
+async def test_large_download_without_save_picker_has_bounded_fallback(browser):
+    metadata = {**file_receipt(b'synthetic giant'), 'size_bytes':500_000_000}
+    fixture = MailFixture(file_pages=[files_page(metadata)])
+    async with BrowserCase(browser, fixture, init_script='window.showSaveFilePicker=undefined;' + FILE_BLOBS) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        await p.locator('.file-download').click()
+        await expect(p.locator('#files-error')).to_contain_text('Save file picker')
+        assert not fixture.downloads() and not await p.evaluate('window.__file_blobs'), 'Unsupported browsers must not buffer 500 MB'
+    data = b'The bounded fallback is inert.' * 40001
+    metadata = file_receipt(data, 'fallback.bin')
+    fixture = MailFixture(file_pages=[files_page(metadata)], download_results=[(200,data,{})])
+    async with BrowserCase(browser, fixture, init_script='window.showSaveFilePicker=undefined;' + FILE_BLOBS + CHUNKED_DOWNLOAD) as case:
+        p = case.page
+        await case.join()
+        await open_files(case)
+        async with p.expect_download() as info:
+            await p.locator('.file-download').click()
+        assert Path(await (await info.value).path()).read_bytes() == data
+        assert await p.evaluate('window.__file_blobs') == [{'type':'application/octet-stream','size':len(data)}]
+
+
 async def main():
     tests = [
         test_token_and_privacy,
@@ -2655,6 +2908,14 @@ async def main():
         test_room_tabs_expiry_while_inactive_does_not_restore_old_data,
         test_room_tabs_bound_keyboard_and_narrow_layout,
         test_room_tabs_local_labels_screenshots_and_pagehide_forgets_every_room,
+        test_stream_sha256_matches_independent_vectors_and_chunk_boundaries,
+        test_stream_upload_maximum_uses_file_body_without_large_allocation,
+        test_stream_upload_actual_bytes_headers_and_file_space_full,
+        test_stream_upload_retry_and_stale_response_survive_room_tabs,
+        test_large_live_files_remain_downloadable_after_upload_limit_reverts,
+        test_stream_download_aborts_tampered_truncated_or_oversized_files,
+        test_stream_download_room_change_aborts_uncommitted_file,
+        test_large_download_without_save_picker_has_bounded_fallback,
     ]
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
     async with async_playwright() as playwright:

@@ -29,10 +29,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check Python syntax and command help
         run: |
-          python3 -m py_compile examples/agent.py examples/check_live.py
+          python3 -m py_compile examples/agent.py examples/files.py examples/check_live.py
           python3 examples/agent.py --help
           python3 examples/agent.py send --help
           python3 examples/agent.py read --help
+          python3 examples/files.py --help
+          python3 examples/files.py upload --help
+          python3 examples/files.py download --help
           python3 - <<'PY'
           import re
           import subprocess

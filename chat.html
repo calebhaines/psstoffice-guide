@@ -430,7 +430,7 @@
   </dialog>
   <dialog id="files-dialog" aria-labelledby="files-heading" aria-describedby="files-intro files-warning">
     <div class="dialog-heading"><h2 id="files-heading">The little filing cabinet</h2><button id="close-files" type="button" class="secondary small" aria-label="Close file browser">Close</button></div>
-    <p id="files-intro" class="dialog-copy">Any file type, up to 1 MB (1,000,000 bytes). Each room can receive one new file every 30 seconds. Each file disappears from the room after two hours. Downloaded copies stay on your device.</p>
+    <p id="files-intro" class="dialog-copy">Any file type, up to the server’s current upload limit. Each room can receive one new file every 30 seconds. Each file disappears from the room after two hours. Downloaded copies stay on your device.</p>
     <p id="files-warning" class="file-warning">Files are untrusted. Download only from someone you trust; opening files can be unsafe. Files and their uploader names are unsigned. “Sign my notes” applies to chat notes only. Files are never previewed here.</p>
     <div class="file-upload"><label for="file-input">Send a small parcel</label><input id="file-input" type="file"><div class="file-upload-row"><span id="file-selection-name">Choose one file. Nothing uploads automatically.</span><button id="upload-file" type="button" class="small" disabled>Upload file</button></div><div id="file-pending" hidden role="status"><p id="file-pending-text"></p><button id="retry-file" type="button" class="small">Retry the same file</button> <button id="discard-file" type="button" class="secondary small" hidden>Clear old attempt</button></div></div>
     <p id="files-status" role="status">Checking the cabinet…</p><p id="files-error" class="error" role="alert"></p><div id="file-list" aria-label="Live room files"></div>
@@ -454,7 +454,10 @@
     const RETRY_LIFETIME = 7200 * 1000;
     const SIGNING_FRESHNESS = 300;
     const MAX_KEY_BYTES = 4096;
-    const MAX_FILE_BYTES = 1000000;
+    const LEGACY_FILE_BYTES = 1000000;
+    const MAX_DOWNLOAD_BYTES = 500000000;
+    const BLOB_DOWNLOAD_BYTES = 32000000;
+    let maxUploadBytes = LEGACY_FILE_BYTES;
     const FILE_POLL_INTERVAL = 15000;
     const FILE_JSON_LIMIT = 524288;
     const STATUS_POLL_INTERVAL = 15000;
@@ -474,8 +477,8 @@
     const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
     class RequestError extends Error {
-      constructor(kind, status = 0, retryAfter = 0) {
-        super(kind); this.kind = kind; this.status = status; this.retryAfter = retryAfter;
+      constructor(kind, status = 0, retryAfter = 0, code = "") {
+        super(kind); this.kind = kind; this.status = status; this.retryAfter = retryAfter; this.code = code;
       }
     }
     function randomHex(bytes) {
@@ -728,7 +731,7 @@
     }
     function validateFile(value) {
       const fields = ["id", "filename", "size_bytes", "sha256", "username", "created_at", "expires_at"];
-      if (!plainObject(value) || Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field)) || typeof value.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.id) || !validFileName(value.filename) || !Number.isSafeInteger(value.size_bytes) || value.size_bytes < 0 || value.size_bytes > MAX_FILE_BYTES || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256) || !(value.username === null || (validUsername(value.username) && value.username.length)) || !validFileTime(value.created_at) || !validFileTime(value.expires_at)) throw new RequestError("protocol");
+      if (!plainObject(value) || Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field)) || typeof value.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.id) || !validFileName(value.filename) || !Number.isSafeInteger(value.size_bytes) || value.size_bytes < 0 || value.size_bytes > MAX_DOWNLOAD_BYTES || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256) || !(value.username === null || (validUsername(value.username) && value.username.length)) || !validFileTime(value.created_at) || !validFileTime(value.expires_at)) throw new RequestError("protocol");
       const lifetime = Date.parse(value.expires_at) - Date.parse(value.created_at);
       if (lifetime <= 0 || lifetime > RETRY_LIFETIME) throw new RequestError("protocol");
       return Object.fromEntries(fields.map((field) => [field, value[field]]));
@@ -753,18 +756,24 @@
         return buffer.slice(0, total);
       } finally { buffer.fill(0); reader.releaseLock(); }
     }
-    async function fileRequest(s, path, body, panelController = null, binary = false, jsonLimit = FILE_JSON_LIMIT) {
+    async function fileRequest(s, path, body, panelController = null, binary = false, jsonLimit = FILE_JSON_LIMIT, rawFile = null) {
       const controller = new AbortController(); const signals = [s.controller.signal];
       if (panelController) signals.push(panelController.signal);
       const onAbort = () => controller.abort(); let timedOut = false;
       for (const signal of signals) { signal.addEventListener("abort", onAbort, { once: true }); if (signal.aborted) controller.abort(); }
-      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, rawFile ? 900000 : 30000);
       try {
-        const response = await fetch(API + path, { method: "POST", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { "Content-Type": "application/json", "X-Room-Token": s.token }, body: JSON.stringify(body), signal: controller.signal });
-        if (!response.ok) { await response.body?.cancel(); throw new RequestError("http", response.status, retryDelay(response.headers.get("Retry-After"))); }
+        const headers = { "Content-Type": rawFile ? "application/octet-stream" : "application/json", "X-Room-Token": s.token };
+        if (rawFile) {
+          headers["X-File-Name"] = base64url(encoder.encode(body.filename)); headers["X-File-Size"] = String(rawFile.size); headers["X-Client-File-ID"] = body.client_file_id;
+          if (body.username) headers["X-File-Username"] = base64url(encoder.encode(body.username));
+        }
+        // Passing the immutable File lets the browser stream its bytes directly.
+        const response = await fetch(API + path, { method: "POST", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers, body: rawFile || JSON.stringify(body), signal: controller.signal });
+        if (!response.ok) throw await fileHttpError(response);
         const type = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
         if (type !== (binary ? "application/octet-stream" : "application/json")) { await response.body?.cancel(); throw new RequestError("protocol"); }
-        const bytes = await readBoundedBytes(response, binary ? MAX_FILE_BYTES : jsonLimit);
+        const bytes = await readBoundedBytes(response, binary ? LEGACY_FILE_BYTES : jsonLimit);
         if (!current(s) || panelController?.signal.aborted) { bytes.fill(0); throw new RequestError("cancelled"); }
         if (binary) return { data: bytes, status: response.status };
         try { return { data: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), status: response.status }; }
@@ -775,6 +784,38 @@
         if (!current(s) || panelController?.signal.aborted) throw new RequestError("cancelled");
         throw new RequestError(timedOut ? "timeout" : "network");
       } finally { clearTimeout(timer); for (const signal of signals) signal.removeEventListener("abort", onAbort); }
+    }
+    async function fileHttpError(response) {
+      let code = "";
+      try {
+        const bytes = await readBoundedBytes(response, 4096);
+        try { const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); if (data?.error?.code === "file_space_full") code = "file_space_full"; }
+        finally { bytes.fill(0); }
+      } catch { await response.body?.cancel().catch(() => {}); }
+      return new RequestError("http", response.status, retryDelay(response.headers.get("Retry-After")), code);
+    }
+    async function discoverFileLimit(s, panelController) {
+      const controller = new AbortController(); const signals = [s.controller.signal, panelController.signal];
+      const onAbort = () => controller.abort();
+      for (const signal of signals) { signal.addEventListener("abort", onAbort, { once: true }); if (signal.aborted) controller.abort(); }
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        // Public capabilities only: no room token, identity, or credentials.
+        const response = await fetch(API + "/", { method: "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: controller.signal });
+        if (!response.ok || response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") { await response.body?.cancel(); return; }
+        const bytes = await readBoundedBytes(response, 16384);
+        try {
+          const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); const limit = data?.max_file_bytes;
+          if (filePanelCurrent(s, panelController) && Number.isSafeInteger(limit) && limit >= 0 && limit <= MAX_DOWNLOAD_BYTES) maxUploadBytes = limit;
+        } finally { bytes.fill(0); }
+      } catch { /* Keep the conservative last known limit when discovery fails. */ }
+      finally {
+        clearTimeout(timer); for (const signal of signals) signal.removeEventListener("abort", onAbort);
+        if (filePanelCurrent(s, panelController)) {
+          $("files-intro").textContent = "Any file type, up to " + maxUploadBytes.toLocaleString("en-US") + " bytes (" + (maxUploadBytes / 1000000).toLocaleString("en-US") + " MB). Each room can receive one new file every 30 seconds. Files disappear after two hours. Downloaded copies stay on your device. Large downloads need a browser with a Save file picker.";
+          updateFileControls(s);
+        }
+      }
     }
     function validStatusText(value) {
       return typeof value === "string" && Array.from(value).length > 0 && Array.from(value).length <= 50 && value.trim().length > 0 && validUnicode(value) && !/[\p{Cc}\p{Cs}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value);
@@ -901,6 +942,8 @@
     }
     function filePanelCurrent(s, controller) { return current(s) && ui["files-dialog"].open && s.filesController === controller && !controller.signal.aborted; }
     function fileErrorText(error, download = false) {
+      if (error.code === "file_space_full") return "File space full. The server’s file storage limit has been reached. Wait for files to expire before retrying.";
+      if (error.kind === "save-unavailable") return "This file is too large for an in-memory download. Use a current Chromium browser with a Save file picker, or download it with the API.";
       if (error.status === 404 || error.status === 405) return download ? "This file has expired or is unavailable. Refreshing the cabinet will remove expired files." : "Files are unavailable on this server. Chat notes still work.";
       if (error.kind === "integrity") return "The downloaded bytes did not match this file's size and SHA-256. Nothing was saved.";
       if (error.kind === "oversize") return "The server reply exceeded the safe size limit. Nothing was saved.";
@@ -918,12 +961,12 @@
       const cooldown = Math.max(0, Math.ceil((s.nextFileUploadAt - Date.now()) / 1000));
       const locked = s.fileBusy || Boolean(pending);
       ui["file-input"].disabled = locked;
-      ui["upload-file"].disabled = locked || !selected || selected.size > MAX_FILE_BYTES || cooldown > 0;
+      ui["upload-file"].disabled = locked || !selected || selected.size > maxUploadBytes || cooldown > 0;
       ui["upload-file"].textContent = pending?.sending || s.fileBusy ? "Uploading…" : cooldown > 0 ? "Room waits " + cooldown + "s" : "Upload file";
       if (pending) ui["file-selection-name"].textContent = pending.payload.filename + " · " + pending.size.toLocaleString("en-US") + " bytes · uploader " + (pending.payload.username || "Anonymous") + " (unsigned)";
       else if (selected) {
         const proposed = safeFileName(selected.name);
-        ui["file-selection-name"].textContent = selected.size > MAX_FILE_BYTES ? "Too large: choose a file of at most 1,000,000 bytes." : (proposed !== selected.name ? "Will upload as “" + proposed + "” (name adjusted for a safe download). " : proposed + " · ") + selected.size.toLocaleString("en-US") + " bytes";
+        ui["file-selection-name"].textContent = selected.size > maxUploadBytes ? "Too large: choose a file of at most " + maxUploadBytes.toLocaleString("en-US") + " bytes." : (proposed !== selected.name ? "Will upload as “" + proposed + "” (name adjusted for a safe download). " : proposed + " · ") + selected.size.toLocaleString("en-US") + " bytes";
       } else ui["file-selection-name"].textContent = "Choose one file. Nothing uploads automatically.";
       ui["file-pending"].hidden = !pending || pending.sending;
       if (pending && !pending.sending) {
@@ -1003,20 +1046,24 @@
       if (!current(s) || ui["files-dialog"].open) return;
       s.filesController?.abort(); const controller = new AbortController(); s.filesController = controller;
       ui["files-dialog"].showModal(); ui["files-status"].textContent = "Checking the cabinet…"; ui["files-error"].textContent = "";
-      expireFiles(s); renderFileList(s); void filesLoop(s, controller);
+      expireFiles(s); renderFileList(s); void (async () => { await discoverFileLimit(s, controller); if (filePanelCurrent(s, controller)) await filesLoop(s, controller); })();
     }
     function stopFiles() { const s = session; if (!s) return; s.filesController?.abort(); s.filesController = null; }
     async function prepareFile(s) {
       if (!current(s) || s.fileBusy || s.filePending || Date.now() < s.nextFileUploadAt) return;
       const file = s.selectedFile; const username = ui["active-username"].value;
-      if (!file || file.size > MAX_FILE_BYTES) { ui["files-error"].textContent = "Choose one file of at most 1,000,000 bytes."; return; }
+      if (!file || file.size > maxUploadBytes) { ui["files-error"].textContent = "Choose one file of at most " + maxUploadBytes.toLocaleString("en-US") + " bytes."; return; }
       if (!validUsername(username)) { ui["files-error"].textContent = "Your uploader name can contain at most 64 Unicode characters."; return; }
       const operation = ++s.fileVersion; s.fileBusy = true; ui["files-error"].textContent = ""; updateFileControls(s);
       let bytes;
       try {
+        if (file.size > LEGACY_FILE_BYTES) {
+          const payload = { filename: safeFileName(file.name), client_file_id: randomHex(16) }; if (username.length) payload.username = username;
+          s.filePending = { payload, rawFile: file, size: file.size, hash: null, startedAt: Date.now(), retryAt: 0, sending: false }; s.fileBusy = false; updateFileControls(s); void sendFilePending(s); return;
+        }
         bytes = new Uint8Array(await file.arrayBuffer());
         if (!current(s) || s.fileVersion !== operation) return;
-        if (bytes.length !== file.size || bytes.length > MAX_FILE_BYTES) throw new RequestError("oversize");
+        if (bytes.length !== file.size || bytes.length > LEGACY_FILE_BYTES) throw new RequestError("oversize");
         const hash = await fileHash(bytes); if (!current(s) || s.fileVersion !== operation) return;
         const payload = { filename: safeFileName(file.name), data_base64: fileBase64(bytes), client_file_id: randomHex(16) }; if (username.length) payload.username = username;
         s.filePending = { payload, size: bytes.length, hash, startedAt: Date.now(), retryAt: 0, sending: false }; s.fileBusy = false; updateFileControls(s); void sendFilePending(s);
@@ -1027,20 +1074,99 @@
       if (!current(s) || !s.filePending || s.filePending.sending || Date.now() < Math.max(s.filePending.retryAt, s.nextFileUploadAt) || Date.now() - s.filePending.startedAt >= RETRY_LIFETIME) return;
       const pending = s.filePending; pending.sending = true; ui["files-error"].textContent = ""; updateFileControls(s);
       try {
-        const { data, status } = await fileRequest(s, "/v1/files", pending.payload);
+        const { data, status } = await fileRequest(s, pending.rawFile ? "/v1/files/upload" : "/v1/files", pending.payload, null, false, FILE_JSON_LIMIT, pending.rawFile);
         if (status !== 201) throw new RequestError("protocol");
         const file = validateFile(data);
-        if (file.filename !== pending.payload.filename || file.username !== (pending.payload.username ?? null) || file.size_bytes !== pending.size || file.sha256 !== pending.hash) throw new RequestError("protocol");
+        if (file.filename !== pending.payload.filename || file.username !== (pending.payload.username ?? null) || file.size_bytes !== pending.size || (pending.hash !== null && file.sha256 !== pending.hash)) throw new RequestError("protocol");
         if (!current(s) || s.filePending !== pending) return;
         s.files.set(file.id, file); s.fileUploadVersion++; while (s.files.size > HISTORY_LIMIT) s.files.delete(s.files.keys().next().value);
         s.nextFileUploadAt = Math.max(s.nextFileUploadAt, Date.parse(file.created_at) + 30000);
-        pending.payload.data_base64 = ""; s.filePending = null; s.selectedFile = null; ui["file-input"].value = ""; ui["files-error"].textContent = "";
+        clearFilePending(pending); s.filePending = null; s.selectedFile = null; ui["file-input"].value = ""; ui["files-error"].textContent = "";
         renderFileList(s); updateFileControls(s); toast("File delivered. Here for two hours; downloads are unsigned."); announce("File delivered.");
       } catch (error) {
         if (!current(s) || s.filePending !== pending) return;
         pending.sending = false; pending.retryAt = Date.now() + Math.max(error.retryAfter || 0, 1000);
-        if ([400, 404, 405, 413, 422].includes(error.status)) { pending.payload.data_base64 = ""; s.filePending = null; }
+        if ([400, 404, 405, 413, 422].includes(error.status)) { clearFilePending(pending); s.filePending = null; }
         ui["files-error"].textContent = fileErrorText(error); updateFileControls(s);
+      }
+    }
+    // SHA-256 for streamed downloads. State stays under 1 KiB regardless of file size.
+    class StreamSha256 {
+      constructor() {
+        this.state = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+        this.words = new Uint32Array(64); this.block = new Uint8Array(64); this.used = 0; this.length = 0; this.finished = false;
+      }
+      transform(bytes, offset = 0) {
+        const w = this.words; const rotate = (x, bits) => (x >>> bits) | (x << (32 - bits));
+        for (let i = 0; i < 16; i++) { const at = offset + i * 4; w[i] = (bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3]; }
+        for (let i = 16; i < 64; i++) { const x = w[i - 15], y = w[i - 2]; w[i] = (w[i - 16] + (rotate(x, 7) ^ rotate(x, 18) ^ (x >>> 3)) + w[i - 7] + (rotate(y, 17) ^ rotate(y, 19) ^ (y >>> 10))) >>> 0; }
+        let [a, b, c, d, e, f, g, h] = this.state;
+        for (let i = 0; i < 64; i++) {
+          const t1 = (h + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)) + ((e & f) ^ (~e & g)) + StreamSha256.constants[i] + w[i]) >>> 0;
+          const t2 = ((rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+          h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+        }
+        for (const [i, value] of [a, b, c, d, e, f, g, h].entries()) this.state[i] = (this.state[i] + value) >>> 0;
+      }
+      update(bytes) {
+        if (this.finished || !(bytes instanceof Uint8Array)) throw new RequestError("protocol");
+        this.length += bytes.byteLength; let offset = 0;
+        if (this.used) { const take = Math.min(64 - this.used, bytes.length); this.block.set(bytes.subarray(0, take), this.used); this.used += take; offset += take; if (this.used === 64) { this.transform(this.block); this.used = 0; } }
+        while (offset + 64 <= bytes.length) { this.transform(bytes, offset); offset += 64; }
+        if (offset < bytes.length) { this.block.set(bytes.subarray(offset)); this.used = bytes.length - offset; }
+      }
+      digest() {
+        if (this.finished) throw new RequestError("protocol"); this.finished = true;
+        this.block[this.used++] = 0x80;
+        if (this.used > 56) { this.block.fill(0, this.used); this.transform(this.block); this.used = 0; }
+        this.block.fill(0, this.used, 56); const view = new DataView(this.block.buffer);
+        view.setUint32(56, Math.floor(this.length / 536870912)); view.setUint32(60, (this.length * 8) >>> 0); this.transform(this.block);
+        const result = Array.from(this.state, (word) => word.toString(16).padStart(8, "0")).join(""); this.block.fill(0); this.words.fill(0); this.state.fill(0); return result;
+      }
+      static constants = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
+    }
+    async function streamFileDownload(s, file, panelController) {
+      const controller = new AbortController(); const signals = [s.controller.signal, panelController.signal];
+      let writer = null, reader = null, committed = false, timedOut = false; const pieces = [];
+      const onAbort = () => { controller.abort(); void writer?.abort().catch(() => {}); };
+      for (const signal of signals) { signal.addEventListener("abort", onAbort, { once: true }); if (signal.aborted) controller.abort(); }
+      const timer = setTimeout(() => { timedOut = true; onAbort(); }, 900000);
+      try {
+        if (typeof globalThis.showSaveFilePicker === "function") {
+          let handle;
+          try { handle = await showSaveFilePicker({ suggestedName: safeFileName(file.filename) }); }
+          catch (error) { throw new RequestError(error.name === "AbortError" ? "cancelled" : "save-unavailable"); }
+          if (!filePanelCurrent(s, panelController)) throw new RequestError("cancelled");
+          // The browser writes a temporary file and commits it only on close().
+          writer = await handle.createWritable();
+          if (!filePanelCurrent(s, panelController)) throw new RequestError("cancelled");
+        } else if (file.size_bytes > BLOB_DOWNLOAD_BYTES) throw new RequestError("save-unavailable");
+        const response = await fetch(API + "/v1/files/download", { method: "POST", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { "Content-Type": "application/json", "X-Room-Token": s.token }, body: JSON.stringify({ file_id: file.id }), signal: controller.signal });
+        if (!response.ok) throw await fileHttpError(response);
+        const length = response.headers.get("Content-Length");
+        if (response.status !== 200 || response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/octet-stream" || !response.body?.getReader) { await response.body?.cancel(); throw new RequestError("protocol"); }
+        if (length !== null && (!/^\d+$/.test(length) || Number(length) !== file.size_bytes)) { await response.body.cancel(); throw new RequestError("integrity"); }
+        reader = response.body.getReader(); const hash = new StreamSha256(); let total = 0;
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break;
+          if (!filePanelCurrent(s, panelController) || Date.parse(file.expires_at) <= Date.now()) throw new RequestError("cancelled");
+          if (!(value instanceof Uint8Array) || total + value.byteLength > file.size_bytes || total + value.byteLength > MAX_DOWNLOAD_BYTES) throw new RequestError("oversize");
+          hash.update(value); total += value.byteLength;
+          if (writer) await writer.write(value); else pieces.push(value);
+        }
+        if (total !== file.size_bytes || hash.digest() !== file.sha256) throw new RequestError("integrity");
+        if (!filePanelCurrent(s, panelController) || Date.parse(file.expires_at) <= Date.now()) throw new RequestError("cancelled");
+        if (writer) { await writer.close(); committed = true; return null; }
+        return new Blob(pieces, { type: "application/octet-stream" });
+      } catch (error) {
+        if (error instanceof RequestError) throw error;
+        if (!filePanelCurrent(s, panelController)) throw new RequestError("cancelled");
+        throw new RequestError(timedOut ? "timeout" : "network");
+      } finally {
+        clearTimeout(timer); for (const signal of signals) signal.removeEventListener("abort", onAbort);
+        if (reader) { try { await reader.cancel(); } catch {} reader.releaseLock(); }
+        if (writer && !committed) { try { await writer.abort(); } catch {} }
+        for (const piece of pieces) piece.fill(0);
       }
     }
     async function downloadFile(s, file) {
@@ -1049,15 +1175,21 @@
       s.fileDownloading.add(file.id); ui["files-error"].textContent = ""; renderFileList(s);
       let bytes;
       try {
-        const result = await fileRequest(s, "/v1/files/download", { file_id: file.id }, controller, true); bytes = result.data;
-        if (result.status !== 200 || bytes.length !== file.size_bytes || await fileHash(bytes) !== file.sha256) throw new RequestError("integrity");
+        let blob;
+        if (file.size_bytes <= LEGACY_FILE_BYTES) {
+          const result = await fileRequest(s, "/v1/files/download", { file_id: file.id }, controller, true); bytes = result.data;
+          if (result.status !== 200 || bytes.length !== file.size_bytes || await fileHash(bytes) !== file.sha256) throw new RequestError("integrity");
+          blob = new Blob([bytes], { type: "application/octet-stream" });
+        } else blob = await streamFileDownload(s, file, controller);
         if (!filePanelCurrent(s, controller) || Date.parse(file.expires_at) <= Date.now()) return;
         // Deliberate downloads only. No preview, parsing, MIME sniffing or opening.
-        const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" })); s.fileUrls.add(url);
-        const link = document.createElement("a"); link.href = url; link.download = safeFileName(file.filename); document.body.append(link); link.click(); link.remove();
-        const timer = setTimeout(() => { URL.revokeObjectURL(url); s.fileUrls.delete(url); s.fileUrlTimers.delete(timer); }, 1000); s.fileUrlTimers.add(timer);
+        if (blob) {
+          const url = URL.createObjectURL(blob); s.fileUrls.add(url);
+          const link = document.createElement("a"); link.href = url; link.download = safeFileName(file.filename); document.body.append(link); link.click(); link.remove();
+          const timer = setTimeout(() => { URL.revokeObjectURL(url); s.fileUrls.delete(url); s.fileUrlTimers.delete(timer); }, 1000); s.fileUrlTimers.add(timer);
+        }
         toast("File downloaded. Opening untrusted files can be unsafe.");
-      } catch (error) { if (filePanelCurrent(s, controller)) ui["files-error"].textContent = fileErrorText(error, true); }
+      } catch (error) { if (filePanelCurrent(s, controller) && error.kind !== "cancelled") ui["files-error"].textContent = fileErrorText(error, true); }
       finally { bytes?.fill(0); s.fileDownloading.delete(file.id); if (filePanelCurrent(s, controller)) renderFileList(s); }
     }
     function validateReceipt(value) {
@@ -1386,6 +1518,7 @@
     function newRoomState(token, username) {
       return { token, username, draft: "", messageType: "", signingEnabled: false, scrollTop: 0, newNotes: false, composerError: "", fileError: "", selectedFile: null, cursor: null, caughtUp: false, controller: new AbortController(), messages: new Map(), elements: new Map(), ownIds: new Set(), order: [], trimmed: false, pending: null, replyTo: null, replyUnavailable: false, expiryTimer: null, key: null, keyBusy: false, keyVersion: 0, cryptoSupport: null, supportPromise: null, verificationKeys: new Map(), selectedChatter: "all", selectedChatterInfo: null, files: new Map(), filesLoaded: false, filesController: null, filePending: null, fileBusy: false, fileVersion: 0, fileUploadVersion: 0, nextFileUploadAt: 0, fileDownloading: new Set(), fileUrls: new Set(), fileUrlTimers: new Set(), roomStatus: null, statusBusy: false, statusCheckBusy: false, statusUncertain: false, statusRetryAt: 0, statusReadVersion: 0, statusWriteVersion: 0, statusDialogVersion: 0 };
     }
+    function clearFilePending(pending) { if (!pending) return; if (Object.hasOwn(pending.payload, "data_base64")) pending.payload.data_base64 = ""; pending.rawFile = null; }
     function clonePending(pending) {
       if (!pending) return null;
       const payload = { ...pending.payload };
@@ -1429,7 +1562,7 @@
       if (!s.order.length) { s.trimmed = false; s.newNotes = false; }
       for (const [id, file] of s.files) if (Date.parse(file.expires_at) <= Date.now()) s.files.delete(id);
       if (s.roomStatus && Date.parse(s.roomStatus.expires_at) <= Date.now()) s.roomStatus = null;
-      if (s.filePending && Date.now() - s.filePending.startedAt >= RETRY_LIFETIME) { s.filePending.payload.data_base64 = ""; s.selectedFile = null; }
+      if (s.filePending && Date.now() - s.filePending.startedAt >= RETRY_LIFETIME) { clearFilePending(s.filePending); s.selectedFile = null; }
     }
     function updateRoomExpiry() {
       for (const room of rooms) {
@@ -1493,7 +1626,7 @@
     function cancelAddRoom() { if (document.body.classList.contains("adding-room")) activateRoom(activeRoomId); }
     function forgetRoomState(s) {
       s.controller.abort(); s.filesController?.abort(); clearInterval(s.expiryTimer); s.keyVersion++; s.fileVersion++;
-      if (s.filePending) s.filePending.payload.data_base64 = "";
+      if (s.filePending) clearFilePending(s.filePending);
       s.token = ""; s.username = ""; s.draft = ""; s.messageType = ""; s.composerError = ""; s.fileError = ""; s.pending = null; s.filePending = null; s.selectedFile = null; s.replyTo = null; s.cursor = null; s.key = null; s.supportPromise = null; s.roomStatus = null; s.selectedChatterInfo = null;
       s.messages.clear(); s.elements.clear(); s.ownIds.clear(); s.order.length = 0; s.verificationKeys.clear(); s.files.clear(); s.fileDownloading.clear();
       for (const timer of s.fileUrlTimers) clearTimeout(timer); s.fileUrlTimers.clear(); for (const url of s.fileUrls) URL.revokeObjectURL(url); s.fileUrls.clear();
@@ -1579,7 +1712,7 @@
     ui["retry-file"].addEventListener("click", () => { if (session) void sendFilePending(session); });
     ui["discard-file"].addEventListener("click", () => {
       const s = session; if (!s?.filePending || s.filePending.sending || Date.now() - s.filePending.startedAt < RETRY_LIFETIME) return;
-      s.filePending.payload.data_base64 = ""; s.filePending = null; s.selectedFile = null; ui["file-input"].value = ""; updateFileControls(s);
+      clearFilePending(s.filePending); s.filePending = null; s.selectedFile = null; ui["file-input"].value = ""; updateFileControls(s);
       ui["files-error"].textContent = "Old retry cleared. Choose a file to make a new upload; it may create a second copy.";
     });
     ui["manage-key"].addEventListener("click", () => { if (session && !session.pending) { refreshKeyUI(session); ui["key-error"].textContent = ""; ui["key-dialog"].showModal(); } });
