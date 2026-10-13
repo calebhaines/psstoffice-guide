@@ -1571,7 +1571,12 @@
       }
     }
     function ensureActiveTabVisible() {
-      const tab = $("room-tab-" + activeRoomId); if (tab && !$("room-tabs-bar").hidden) tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const tab = $("room-tab-" + activeRoomId); if (!tab || $("room-tabs-bar").hidden) return;
+      // Scroll only the strip, including its close button; keep the page in place.
+      const list = $("room-tabs"); const bounds = list.getBoundingClientRect(); const item = tab.parentElement.getBoundingClientRect();
+      const left = bounds.left + list.clientLeft; const right = left + list.clientWidth;
+      if (item.left < left) list.scrollLeft -= left - item.left;
+      else if (item.right > right) list.scrollLeft += item.right - right;
     }
     function renderRoomTabs() {
       const list = $("room-tabs"); const focusedId = list.contains(document.activeElement) ? document.activeElement.closest("[data-room-id]")?.dataset.roomId : null;
@@ -1756,6 +1761,7 @@
     ui["new-messages"].addEventListener("click", scrollToBottom);
     ui.messages.addEventListener("scroll", () => { if (nearBottom()) ui["new-messages"].hidden = true; }, { passive: true });
     window.addEventListener("resize", ensureActiveTabVisible);
+    if (typeof ResizeObserver === "function") new ResizeObserver(ensureActiveTabVisible).observe($("room-tabs"));
     window.addEventListener("offline", () => { if (session) setConnection(session, "offline", "Offline"); });
     window.addEventListener("online", () => { if (session) setConnection(session, "reconnecting", "Reconnecting"); });
     window.addEventListener("pagehide", forgetAllRooms);

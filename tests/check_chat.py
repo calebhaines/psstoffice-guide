@@ -2522,12 +2522,27 @@ async def test_room_tabs_bound_keyboard_and_narrow_layout(browser):
             await add_room(case, token)
         await expect(p.locator('#room-tabs [role="tab"]')).to_have_count(8)
         await expect(p.locator("#add-room")).to_be_disabled()
+        tab_visible = """() => {
+          const list = document.querySelector('#room-tabs'), bounds = list.getBoundingClientRect();
+          const active = list.querySelector('[role="tab"][aria-selected="true"]').parentElement.getBoundingClientRect();
+          const left = bounds.left + list.clientLeft, right = left + list.clientWidth;
+          return active.left >= left - .5 && active.right <= right + .5;
+        }"""
         for viewport in [{"width": 1280, "height": 900}, {"width": 390, "height": 844},
                          {"width": 844, "height": 390}, {"width": 390, "height": 320}]:
             await p.set_viewport_size(viewport)
+            # Resize events/observers run at a browser frame boundary. Wait for
+            # the actual visible geometry, including the close button.
+            await p.wait_for_function(tab_visible)
             await assert_layout(p)
             active = await room_tab(p, 8).bounding_box()
             assert active and active["x"] >= 0 and active["x"] + active["width"] <= viewport["width"], "Active tab is clipped instead of scrolled into view"
+        # A container resize also needs to reveal the active tab even when the
+        # window itself did not resize (for example, a surrounding layout change).
+        await p.locator("#room-tabs").evaluate("list => list.style.maxWidth = '180px'")
+        await p.wait_for_function(tab_visible)
+        await p.locator("#room-tabs").evaluate("list => list.style.removeProperty('max-width')")
+        await p.wait_for_function(tab_visible)
         await room_tab(p, 8).focus()
         await p.keyboard.press("Home")
         await expect(room_tab(p, 1)).to_have_attribute("aria-selected", "true")
