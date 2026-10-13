@@ -2766,7 +2766,7 @@ async def test_stream_upload_retry_and_stale_response_survive_room_tabs(browser)
         await expect(p.locator('#retry-file')).to_be_enabled()
         await p.evaluate("window.__raw_mode='hold'")
         await p.locator('#retry-file').click()
-        await p.wait_for_function('window.__raw_uploads.length === 2')
+        await p.wait_for_function('() => window.__raw_uploads.length === 2')
         assert await p.evaluate("""() => {
           const [a,b]=window.__raw_uploads; return a.body===b.body && JSON.stringify(a.headers)===JSON.stringify(b.headers);
         }"""), 'Resuming a room must retry exactly the same immutable File and original metadata'
@@ -2792,7 +2792,7 @@ async def test_large_live_files_remain_downloadable_after_upload_limit_reverts(b
         await open_files(case)
         await expect(p.locator('#files-intro')).to_contain_text('1,000,000 bytes')
         await p.locator('.file-download').click()
-        await p.wait_for_function('window.__stream_save.closed === 1')
+        await p.wait_for_function('() => window.__stream_save.closed === 1')
         saved = await p.evaluate('window.__stream_save')
         assert saved['digest'] == metadata['sha256'] and saved['total'] == len(data)
         assert saved['names'] == ['large-after-revert.bin'] and saved['aborted'] == 0
@@ -2825,7 +2825,7 @@ async def test_stream_download_room_change_aborts_uncommitted_file(browser):
         await open_files(case)
         await p.evaluate('window.__hold_stream_write=true')
         await p.locator('.file-download').click()
-        await p.wait_for_function("typeof window.__release_stream_write === 'function'")
+        await p.wait_for_function("() => typeof window.__release_stream_write === 'function'")
         await p.locator('#close-files').click()
         await add_room(case)
         await room_tab(p,1).click()
