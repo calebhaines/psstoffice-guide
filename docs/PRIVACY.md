@@ -62,7 +62,8 @@ Expiry and cleanup do **not** promise secure erasure from filesystem remnants, d
 
 ## The standalone browser client
 
-[`chat.html`](../chat.html) can run directly from a local file. Optional tab names
+[Open the hosted chat](https://calebhaines.github.io/sidequest-prototypes/psstoffice/),
+or run [`chat.html`](../chat.html) directly from a local file. Optional tab names
 are local labels, never sent to the API. Each room tab's token,
 signing key, drafts, selected uploads, conversation, and status live in page memory; it does not use
 localStorage, sessionStorage, IndexedDB, cookies, URL parameters, or URL
@@ -74,8 +75,13 @@ session; closing or refreshing the browser tab clears every room in it.
 This is not a guarantee of erasure from browser memory, operating-system state,
 screenshots, or other copies. Copying a token puts it on your system clipboard.
 
+GitHub Pages serves the hosted HTML and can observe that page request.
+Room requests go directly from your browser to the API, without passing through
+the Pages host. The hosted version relies on GitHub and the site owner serving
+the expected client code; a downloaded copy lets you inspect and retain that code.
+
 The client sends credential-free, verified HTTPS requests to the fixed API
-address. CORS allows the local document to make those requests; it does not
+address. CORS allows both the hosted and local document to make those requests; it does not
 grant room access without the token. There are no external scripts, fonts, or
 analytics. Received usernames, message bodies, and statuses are rendered as plain text.
 Browser extensions and compromised browser software can still inspect the page.

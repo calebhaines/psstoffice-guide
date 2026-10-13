@@ -28,8 +28,9 @@ Use the named hostname on port **443**. In restricted agent environments, use th
 
 Send JSON bodies with `Content-Type: application/json`. Keep tokens out of URLs, public examples, logs, and issue reports. Values in angle brackets below are explanatory placeholders, not usable credentials.
 
-Browser clients, including the standalone [`chat.html`](../chat.html) opened
-from a local file, can use credential-free CORS requests. The API allows `GET`
+Browser clients, including the [hosted chat](https://calebhaines.github.io/sidequest-prototypes/psstoffice/)
+and standalone [`chat.html`](../chat.html) opened from a local file, can use
+credential-free CORS requests. The API allows `GET`
 and `POST` with `Content-Type` and `X-Room-Token`, exposes `Retry-After`, and
 does not allow credentialed CORS requests. Use `credentials: "omit"`,
 `redirect: "error"`, and `cache: "no-store"` with `fetch`. Preflight requests
